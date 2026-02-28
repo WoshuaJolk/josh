@@ -16,6 +16,7 @@ import { getOnboardingAdlib } from "@/lib/tpoOnboardingAdlib";
 import {
   classifyAvailabilityReply,
   normalizeAlternativeTimeSuggestion,
+  resolveDateStartIso,
   suggestDatePlaceAndReasoning,
 } from "@/lib/datePlanner";
 import {
@@ -27,7 +28,6 @@ import {
   TPO_DEFAULT_REPLY,
   TPO_NO_ACTIVE_DATE,
   TPO_SCHEDULING_WAITING_TEXT,
-  TPO_DATE_PLAN_READY_TEXT_PREFIX,
 } from "@/lib/tpoConstants";
 
 const supabase = createClient(
@@ -35,6 +35,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
+const SUPABASE_UPLOAD_BUCKET =
+  process.env.SUPABASE_UPLOAD_BUCKET?.trim() || "tpo-uploads";
 
 interface SurgeAttachment {
   url?: string;
@@ -71,6 +73,35 @@ const MAX_DIMENSION = 1600;
 const JPEG_QUALITY = 70;
 const MAX_SCHEDULING_ATTEMPTS = 6;
 const SCHEDULING_STALE_MS = 24 * 60 * 60 * 1000;
+const PORTAL_OPEN_LEAD_MS = 3 * 60 * 60 * 1000;
+const FINAL_SCHEDULING_SMS_MAX = 153;
+const ADLIB_ENABLED_QUESTION_IDS = new Set([
+  "work_education",
+  "roots_languages",
+  "city",
+]);
+
+function clampText(value: string, maxChars: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxChars) return compact;
+  if (maxChars <= 1) return compact.slice(0, maxChars);
+  return `${compact.slice(0, maxChars - 1).trimEnd()}...`;
+}
+
+function buildFinalSchedulingMessage(params: {
+  agreedTime: string;
+  placeSuggestion: string;
+  portalOpen: boolean;
+}): string {
+  const { agreedTime, placeSuggestion, portalOpen } = params;
+  const suffix = portalOpen
+    ? " chat is now open."
+    : " chat opens 3 hours before your date.";
+  const basePrefix = `date set for ${agreedTime}. `;
+  const maxPlaceLength = Math.max(24, FINAL_SCHEDULING_SMS_MAX - basePrefix.length - suffix.length);
+  const safePlace = clampText(placeSuggestion, maxPlaceLength);
+  return `${basePrefix}${safePlace}${suffix}`;
+}
 
 async function downloadAttachment(url: string): Promise<AttachmentDownloadResult> {
   const surgeApiKey = process.env.SURGE_API_KEY;
@@ -158,10 +189,14 @@ async function uploadAttachmentToSupabase(
   const fileName = `${folder}/${phoneNumber.replace("+", "")}/${Date.now()}.${extension}`;
 
   const { error } = await supabase.storage
-    .from("tpo-uploads")
+    .from(SUPABASE_UPLOAD_BUCKET)
     .upload(fileName, uploadBuffer, { contentType: uploadContentType });
 
-  if (error) throw new Error(`Supabase upload failed: ${error.message}`);
+  if (error) {
+    throw new Error(
+      `Supabase upload failed (bucket=${SUPABASE_UPLOAD_BUCKET}): ${error.message}`
+    );
+  }
 
   return fileName;
 }
@@ -192,6 +227,20 @@ function mergePhotoAiTags(
   return {
     ...base,
     photoAiTags: mergedTags,
+  } as Prisma.InputJsonValue;
+}
+
+function withIdParseStatus(
+  structuredProfile: Prisma.InputJsonValue,
+  status: "failed" | "verified"
+): Prisma.InputJsonValue {
+  const base =
+    structuredProfile && typeof structuredProfile === "object"
+      ? (structuredProfile as Record<string, unknown>)
+      : {};
+  return {
+    ...base,
+    idParseStatus: status,
   } as Prisma.InputJsonValue;
 }
 
@@ -227,12 +276,15 @@ async function handleOnboarding(
   const sendOnboardingQuestion = async (params: {
     nextQuestion: string;
     previousQuestion: string;
+    previousQuestionId: string | null;
     answer: string;
-    nextIndex: number;
   }) => {
-    const { nextQuestion, previousQuestion, answer, nextIndex } = params;
+    const { nextQuestion, previousQuestion, previousQuestionId, answer } = params;
     const answerWordCount = answer.trim().split(/\s+/).filter(Boolean).length;
-    const shouldAttemptAdlib = answerWordCount >= 4 && nextIndex % 3 === 0;
+    const shouldAttemptAdlib =
+      answerWordCount >= 4 &&
+      !!previousQuestionId &&
+      ADLIB_ENABLED_QUESTION_IDS.has(previousQuestionId);
     const adlib = shouldAttemptAdlib
       ? await getOnboardingAdlib({
           previousQuestion,
@@ -292,8 +344,8 @@ async function handleOnboarding(
           await sendOnboardingQuestion({
             nextQuestion,
             previousQuestion: currentQuestion,
+            previousQuestionId: currentQuestionDef?.id ?? null,
             answer: messageBody,
-            nextIndex,
           });
           return;
         }
@@ -351,8 +403,8 @@ async function handleOnboarding(
         await sendOnboardingQuestion({
           nextQuestion,
           previousQuestion: currentQuestion,
+          previousQuestionId: currentQuestionDef?.id ?? null,
           answer: messageBody,
-          nextIndex,
         });
         return;
       }
@@ -496,7 +548,7 @@ async function handleOnboarding(
         const remaining = 2 - totalPhotos;
         await sendSms(
           phoneNumber,
-          `got it! send ${remaining} more photo${remaining > 1 ? "s" : ""} — need at least 1 close-up and 1 full-body.`,
+          `got it! send ${remaining} more photo${remaining > 1 ? "s" : ""} - need at least 1 close-up and 1 full-body.`,
           { skipProfanityFilter: true }
         );
       }
@@ -611,6 +663,30 @@ async function handleOnboarding(
           console.warn("[tpo/webhook] profile structuring timed out/skipped");
         }
 
+        const hasUsefulDlData =
+          Boolean(dlData.name?.trim()) ||
+          dlData.age !== null ||
+          Boolean(dlData.height?.trim());
+
+        if (!hasUsefulDlData) {
+          const mergedPhotoUrls = Array.from(new Set([...user.photoUrls, idUrl]));
+          const structuredWithFailedId = withIdParseStatus(structuredProfile, "failed");
+          await db.tpoUser.update({
+            where: { id: user.id },
+            data: {
+              photoUrls: mergedPhotoUrls,
+              structuredProfile: structuredWithFailedId,
+              onboardingStep: "AWAITING_ID",
+            },
+          });
+          await sendSms(
+            phoneNumber,
+            "got another photo - still need a clear photo of your driver's license to verify your identity.",
+            { skipProfanityFilter: true }
+          );
+          return;
+        }
+
         await db.tpoUser.update({
           where: { id: user.id },
           data: {
@@ -618,7 +694,7 @@ async function handleOnboarding(
             dlName: dlData.name,
             dlAge: dlData.age,
             dlHeight: dlData.height,
-            structuredProfile,
+            structuredProfile: withIdParseStatus(structuredProfile, "verified"),
             onboardingStep: "COMPLETE",
             status: "PENDING_REVIEW",
           },
@@ -711,15 +787,21 @@ function likelyContainsAlternativeTime(message: string): boolean {
 
 async function parseAlternativeIfPresent(
   message: string,
-  city: string
-): Promise<string | null> {
-  if (!likelyContainsAlternativeTime(message)) return null;
+  city: string,
+  recentMessages: string[]
+): Promise<
+  { kind: "none" } | { kind: "parsed"; slot: string } | { kind: "clarify"; question: string }
+> {
+  if (!likelyContainsAlternativeTime(message)) return { kind: "none" };
   const parsed = await normalizeAlternativeTimeSuggestion({
     message,
     city,
+    recentMessages,
   });
-  if (parsed.status !== "parsed") return null;
-  return parsed.canonicalSlot;
+  if (parsed.status !== "parsed") {
+    return { kind: "clarify", question: parsed.clarificationQuestion };
+  }
+  return { kind: "parsed", slot: parsed.canonicalSlot };
 }
 
 async function runLazySchedulingTimeoutSweep() {
@@ -767,6 +849,51 @@ async function runLazySchedulingTimeoutSweep() {
   }
 }
 
+async function runLazyPortalOpenSweep() {
+  const dueDates = await db.tpoDate.findMany({
+    where: {
+      status: "ACTIVE",
+      portalEnabled: false,
+      schedulingPhase: "AGREED",
+      agreedTime: { not: null },
+    },
+    include: { userA: true, userB: true },
+    take: 20,
+  });
+
+  for (const date of dueDates) {
+    const city = getSharedCity(date.userA.city, date.userB.city);
+    const startIso = await resolveDateStartIso({
+      slot: date.agreedTime ?? "",
+      city,
+      referenceIso: date.createdAt.toISOString(),
+    });
+    if (!startIso) continue;
+
+    const startMs = new Date(startIso).getTime();
+    if (Number.isNaN(startMs)) continue;
+    if (startMs - Date.now() > PORTAL_OPEN_LEAD_MS) continue;
+
+    await db.tpoDate.update({
+      where: { id: date.id },
+      data: { portalEnabled: true },
+    });
+
+    await Promise.all([
+      sendSms(
+        date.userA.phoneNumber,
+        "your date chat is now open. text here to connect before your date.",
+        { skipProfanityFilter: true }
+      ),
+      sendSms(
+        date.userB.phoneNumber,
+        "your date chat is now open. text here to connect before your date.",
+        { skipProfanityFilter: true }
+      ),
+    ]);
+  }
+}
+
 async function handleSchedulingReply(
   senderPhone: string,
   messageBody: string | null
@@ -792,6 +919,28 @@ async function handleSchedulingReply(
   }
 
   const senderIsA = date.userA.phoneNumber === senderPhone;
+  const recipientPhone = senderIsA ? date.userB.phoneNumber : date.userA.phoneNumber;
+  const recentFromSender = await db.tpoMessage.findMany({
+    where: {
+      dateId: date.id,
+      fromPhone: senderPhone,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  const recentMessages = recentFromSender
+    .map((entry) => entry.body)
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+
+  await db.tpoMessage.create({
+    data: {
+      dateId: date.id,
+      fromPhone: senderPhone,
+      toPhone: recipientPhone,
+      body: messageBody,
+      blocked: false,
+    },
+  });
+
   const phase = date.schedulingPhase;
   const now = new Date();
   const lastPrompt = date.lastSchedulingMessageAt;
@@ -848,6 +997,7 @@ async function handleSchedulingReply(
     const parsedAlternative = await normalizeAlternativeTimeSuggestion({
       message: messageBody,
       city: getSharedCity(date.userA.city, date.userB.city),
+      recentMessages,
     });
     if (parsedAlternative.status === "clarify") {
       await sendSms(senderPhone, parsedAlternative.clarificationQuestion, {
@@ -883,6 +1033,7 @@ async function handleSchedulingReply(
     const parsedAlternative = await normalizeAlternativeTimeSuggestion({
       message: messageBody,
       city: getSharedCity(date.userA.city, date.userB.city),
+      recentMessages,
     });
     if (parsedAlternative.status === "clarify") {
       await sendSms(senderPhone, parsedAlternative.clarificationQuestion, {
@@ -915,11 +1066,40 @@ async function handleSchedulingReply(
   }
 
   const proposalLabel = slotLabel(date.proposedSlot);
-  const decision = await classifyAvailabilityReply(messageBody, proposalLabel);
   const sharedCity = getSharedCity(date.userA.city, date.userB.city);
-  const inlineAlternative = await parseAlternativeIfPresent(messageBody, sharedCity);
+  const inlineAlternative = await parseAlternativeIfPresent(
+    messageBody,
+    sharedCity,
+    recentMessages
+  );
+  const decision = await classifyAvailabilityReply(messageBody, proposalLabel);
 
   if (senderIsA && (phase === "WAITING_FOR_A_REPLY" || phase === "PROPOSING_TO_A")) {
+    if (inlineAlternative.kind === "parsed") {
+      await db.tpoDate.update({
+        where: { id: date.id },
+        data: {
+          proposedSlot: inlineAlternative.slot,
+          userAAvailable: true,
+          userBAvailable: null,
+          schedulingPhase: "WAITING_FOR_B_REPLY",
+          schedulingAttemptCount: { increment: 1 },
+          lastSchedulingMessageAt: new Date(),
+        },
+      });
+      await sendSms(
+        date.userB.phoneNumber,
+        `can you do ${inlineAlternative.slot}? reply yes or no.`,
+        {
+          skipProfanityFilter: true,
+        }
+      );
+      await sendSms(senderPhone, TPO_SCHEDULING_WAITING_TEXT, {
+        skipProfanityFilter: true,
+      });
+      return true;
+    }
+
     if (decision === "yes") {
       await db.tpoDate.update({
         where: { id: date.id },
@@ -940,27 +1120,16 @@ async function handleSchedulingReply(
       return true;
     }
 
-    if (inlineAlternative) {
+    if (inlineAlternative.kind === "clarify") {
+      await sendSms(senderPhone, inlineAlternative.question, {
+        skipProfanityFilter: true,
+      });
       await db.tpoDate.update({
         where: { id: date.id },
         data: {
-          proposedSlot: inlineAlternative,
-          userAAvailable: true,
-          userBAvailable: null,
-          schedulingPhase: "WAITING_FOR_B_REPLY",
           schedulingAttemptCount: { increment: 1 },
           lastSchedulingMessageAt: new Date(),
         },
-      });
-      await sendSms(
-        date.userB.phoneNumber,
-        `can you do ${inlineAlternative}? reply yes or no.`,
-        {
-          skipProfanityFilter: true,
-        }
-      );
-      await sendSms(senderPhone, TPO_SCHEDULING_WAITING_TEXT, {
-        skipProfanityFilter: true,
       });
       return true;
     }
@@ -1011,11 +1180,11 @@ async function handleSchedulingReply(
         schedulingPhase: "AGREED",
       },
     });
-  } else if (inlineAlternative) {
+  } else if (inlineAlternative.kind === "parsed") {
     await db.tpoDate.update({
       where: { id: date.id },
       data: {
-        proposedSlot: inlineAlternative,
+        proposedSlot: inlineAlternative.slot,
         userAAvailable: null,
         userBAvailable: true,
         schedulingPhase: "WAITING_FOR_A_REPLY",
@@ -1025,7 +1194,7 @@ async function handleSchedulingReply(
     });
     await sendSms(
       date.userA.phoneNumber,
-      `can you do ${inlineAlternative}? reply yes or no.`,
+      `can you do ${inlineAlternative.slot}? reply yes or no.`,
       {
         skipProfanityFilter: true,
       }
@@ -1046,6 +1215,18 @@ async function handleSchedulingReply(
     });
     await sendSms(senderPhone, "what time works better for you?", {
       skipProfanityFilter: true,
+    });
+    return true;
+  } else if (inlineAlternative.kind === "clarify") {
+    await sendSms(senderPhone, inlineAlternative.question, {
+      skipProfanityFilter: true,
+    });
+    await db.tpoDate.update({
+      where: { id: date.id },
+      data: {
+        schedulingAttemptCount: { increment: 1 },
+        lastSchedulingMessageAt: new Date(),
+      },
     });
     return true;
   } else {
@@ -1075,6 +1256,17 @@ async function handleSchedulingReply(
 
   const agreedTime = slotLabel(refreshed.proposedSlot);
   const city = getSharedCity(refreshed.userA.city, refreshed.userB.city);
+  const agreedStartIso = await resolveDateStartIso({
+    slot: agreedTime,
+    city,
+    referenceIso: refreshed.createdAt.toISOString(),
+  });
+  const shouldOpenPortalNow = (() => {
+    if (!agreedStartIso) return false;
+    const startMs = new Date(agreedStartIso).getTime();
+    if (Number.isNaN(startMs)) return false;
+    return startMs - Date.now() <= PORTAL_OPEN_LEAD_MS;
+  })();
   const placeSuggestion = await suggestDatePlaceAndReasoning({
     city,
     agreedTime,
@@ -1099,14 +1291,18 @@ async function handleSchedulingReply(
   await db.tpoDate.update({
     where: { id: refreshed.id },
     data: {
-      portalEnabled: true,
+      portalEnabled: shouldOpenPortalNow,
       agreedTime,
       suggestedPlace: placeSuggestion,
       schedulingPhase: "AGREED",
     },
   });
 
-  const finalMessage = `${TPO_DATE_PLAN_READY_TEXT_PREFIX}\n\n${placeSuggestion}\n\nonce you both confirm this works, just text here — the chat portal is now open.`.toLowerCase();
+  const finalMessage = buildFinalSchedulingMessage({
+    agreedTime,
+    placeSuggestion,
+    portalOpen: shouldOpenPortalNow,
+  });
   await Promise.all([
     sendSms(refreshed.userA.phoneNumber, finalMessage, {
       skipProfanityFilter: true,
@@ -1144,6 +1340,7 @@ export async function POST(req: NextRequest) {
     }
 
     await runLazySchedulingTimeoutSweep();
+    await runLazyPortalOpenSweep();
 
     const msg = payload.data;
     const senderPhone: string = msg.conversation?.contact?.phone_number;

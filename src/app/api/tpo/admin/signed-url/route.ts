@@ -10,6 +10,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
+const SUPABASE_UPLOAD_BUCKET =
+  process.env.SUPABASE_UPLOAD_BUCKET?.trim() || "tpo-uploads";
 
 const SIGNED_URL_EXPIRY_SECONDS = 3600; // 1 hour
 
@@ -18,6 +20,34 @@ const TRANSFORM_FULL = { width: 1200, quality: 70 };
 
 function isHttpUrl(value: string): boolean {
   return value.startsWith("http://") || value.startsWith("https://");
+}
+
+function parseStoredImageRef(path: string):
+  | { kind: "direct"; url: string }
+  | { kind: "storage"; objectPath: string }
+  | { kind: "invalid" } {
+  const raw = path.trim();
+  if (!raw) return { kind: "invalid" };
+
+  // Legacy fallback refs from onboarding photo upload failures.
+  if (raw.startsWith("attachment_fallback:")) {
+    const fallbackUrl = raw.slice("attachment_fallback:".length).trim();
+    if (isHttpUrl(fallbackUrl)) {
+      return { kind: "direct", url: fallbackUrl };
+    }
+    return { kind: "invalid" };
+  }
+
+  // Placeholder ref when the inbound attachment had no resolvable URL.
+  if (raw.startsWith("attachment_unresolved:")) {
+    return { kind: "invalid" };
+  }
+
+  if (isHttpUrl(raw)) {
+    return { kind: "direct", url: raw };
+  }
+
+  return { kind: "storage", objectPath: raw };
 }
 
 export async function POST(req: NextRequest) {
@@ -41,15 +71,18 @@ export async function POST(req: NextRequest) {
 
     const results = await Promise.all(
       paths.map(async (path: string) => {
-        // Some older records may already store an absolute URL instead of
-        // a storage path. In that case we can use it directly.
-        if (isHttpUrl(path)) {
-          return { path, signedUrl: path };
+        const parsed = parseStoredImageRef(path);
+        if (parsed.kind === "invalid") {
+          return { path, signedUrl: null };
+        }
+
+        if (parsed.kind === "direct") {
+          return { path, signedUrl: parsed.url };
         }
 
         const { data, error } = await supabase.storage
-          .from("tpo-uploads")
-          .createSignedUrl(path, SIGNED_URL_EXPIRY_SECONDS, { transform });
+          .from(SUPABASE_UPLOAD_BUCKET)
+          .createSignedUrl(parsed.objectPath, SIGNED_URL_EXPIRY_SECONDS, { transform });
 
         if (!error && data?.signedUrl) {
           return { path, signedUrl: data.signedUrl };
@@ -58,8 +91,8 @@ export async function POST(req: NextRequest) {
         // Fallback: if transform fails for a valid image/object, try again
         // without transform so the UI still renders the asset.
         const fallback = await supabase.storage
-          .from("tpo-uploads")
-          .createSignedUrl(path, SIGNED_URL_EXPIRY_SECONDS);
+          .from(SUPABASE_UPLOAD_BUCKET)
+          .createSignedUrl(parsed.objectPath, SIGNED_URL_EXPIRY_SECONDS);
         if (!fallback.error && fallback.data?.signedUrl) {
           return { path, signedUrl: fallback.data.signedUrl };
         }

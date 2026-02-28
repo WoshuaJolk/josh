@@ -5,14 +5,37 @@ import {
   INTERNAL_API_KEY_HEADER,
 } from "@/lib/internalApiAuth";
 import { sendSms } from "@/lib/surgeSend";
-import { suggestDatePlaceAndReasoning } from "@/lib/datePlanner";
-import { TPO_DATE_PLAN_READY_TEXT_PREFIX } from "@/lib/tpoConstants";
+import { resolveDateStartIso, suggestDatePlaceAndReasoning } from "@/lib/datePlanner";
 
 function getSharedCity(cityA?: string | null, cityB?: string | null): string {
   const a = cityA?.trim();
   const b = cityB?.trim();
   if (a && b && a.toLowerCase() === b.toLowerCase()) return a;
   return a || b || "your city";
+}
+const PORTAL_OPEN_LEAD_MS = 3 * 60 * 60 * 1000;
+const FINAL_SCHEDULING_SMS_MAX = 153;
+
+function clampText(value: string, maxChars: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxChars) return compact;
+  if (maxChars <= 1) return compact.slice(0, maxChars);
+  return `${compact.slice(0, maxChars - 1).trimEnd()}...`;
+}
+
+function buildFinalSchedulingMessage(params: {
+  agreedTime: string;
+  placeSuggestion: string;
+  portalOpen: boolean;
+}): string {
+  const { agreedTime, placeSuggestion, portalOpen } = params;
+  const suffix = portalOpen
+    ? " chat is now open."
+    : " chat opens 3 hours before your date.";
+  const basePrefix = `date set for ${agreedTime}. `;
+  const maxPlaceLength = Math.max(24, FINAL_SCHEDULING_SMS_MAX - basePrefix.length - suffix.length);
+  const safePlace = clampText(placeSuggestion, maxPlaceLength);
+  return `${basePrefix}${safePlace}${suffix}`;
 }
 
 export async function POST(req: NextRequest) {
@@ -99,6 +122,17 @@ export async function POST(req: NextRequest) {
     if (action === "mark_agreed_open_portal") {
       const agreedTime = slot?.trim() || date.proposedSlot || "the agreed time";
       const city = getSharedCity(date.userA.city, date.userB.city);
+      const agreedStartIso = await resolveDateStartIso({
+        slot: agreedTime,
+        city,
+        referenceIso: date.createdAt.toISOString(),
+      });
+      const shouldOpenPortalNow = (() => {
+        if (!agreedStartIso) return false;
+        const startMs = new Date(agreedStartIso).getTime();
+        if (Number.isNaN(startMs)) return false;
+        return startMs - Date.now() <= PORTAL_OPEN_LEAD_MS;
+      })();
       const placeSuggestion = await suggestDatePlaceAndReasoning({
         city,
         agreedTime,
@@ -122,14 +156,18 @@ export async function POST(req: NextRequest) {
       await db.tpoDate.update({
         where: { id: date.id },
         data: {
-          portalEnabled: true,
+          portalEnabled: shouldOpenPortalNow,
           agreedTime,
           suggestedPlace: placeSuggestion,
           schedulingPhase: "AGREED",
         },
       });
 
-      const finalMessage = `${TPO_DATE_PLAN_READY_TEXT_PREFIX}\n\n${placeSuggestion}\n\nonce you both confirm this works, just text here — the chat portal is now open.`.toLowerCase();
+      const finalMessage = buildFinalSchedulingMessage({
+        agreedTime,
+        placeSuggestion,
+        portalOpen: shouldOpenPortalNow,
+      });
       await Promise.all([
         sendSms(date.userA.phoneNumber, finalMessage, { skipProfanityFilter: true }),
         sendSms(date.userB.phoneNumber, finalMessage, { skipProfanityFilter: true }),

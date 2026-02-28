@@ -1,5 +1,5 @@
 export const TPO_INTRO_TEXT =
-  "hey! welcome to jøsh. we got rid of everything you hate about dating apps. no swiping, no chit-chat, and no joshes. we'll handpick your best match and send you a time and place so you don't have to overthink it. first, a few questions about you.";
+  "hey! welcome to jøsh - no swiping, no small talk, no overthinking. we'll handpick a match and text the plan. first, a few quick questions.";
 
 interface OnboardingQuestionDef {
   id: string;
@@ -11,11 +11,11 @@ const ONBOARDING_QUESTION_DEFS: OnboardingQuestionDef[] = [
   {
     id: "intent",
     prompt:
-      "are you looking for a hookup or a long-term relationship? if open to both, which way are you leaning?",
+      "are you looking for something long-term or a hookup? if open to both, which way are you leaning?",
   },
   {
     id: "work_education",
-    prompt: "what do you do for work, and what's your education background?",
+    prompt: "what do you do for work or school, and what's your education background?",
   },
   {
     id: "roots_languages",
@@ -27,35 +27,23 @@ const ONBOARDING_QUESTION_DEFS: OnboardingQuestionDef[] = [
   },
   {
     id: "substances_self",
-    prompt: "how do you handle drinking, smoking, and other substances?",
+    prompt:
+      "how do you handle drinking, smoking, and other substances? what are your dealbreakers for a partner on those?",
   },
   {
     id: "values_alignment",
     prompt:
-      "how important are politics and religion to you, and do you want a partner who matches you there?",
-  },
-  {
-    id: "substances_partner",
-    prompt:
-      "when it comes to a partner, what are your dealbreakers for drinking, smoking, or drugs?",
+      "what are your religious and political views? do you want a partner who shares them?",
   },
   {
     id: "vibe_partner",
     prompt:
-      "when you picture your ideal partner, what's their general vibe: energy, ambition, social style?",
-  },
-  {
-    id: "humor_communication",
-    prompt: "what kind of humor and communication style works best for you?",
-  },
-  {
-    id: "fitness_partner",
-    prompt: "how important is physical fitness in a partner?",
+      "when you picture your ideal partner, what's their general vibe: energy, ambition, humor, social style?",
   },
   { id: "age_height", prompt: "what are your age and height preferences?" },
   {
     id: "physical_preferences",
-    prompt: "do you have any preferences regarding race, ethnicity, or body type?",
+    prompt: "do you have any preferences regarding ethnicity or body type?",
   },
   { id: "city", prompt: "what city are you currently living in?" },
   {
@@ -90,16 +78,16 @@ export function getPreferenceQuestions(): string[] {
 }
 
 export const TPO_PHOTOS_TEXT =
-  "send at least 2 photos of yourself: 1 close-up and 1 full-body. these won't be shared with anyone — they're just to help our matchmaker.";
+  "send at least 2 photos: 1 close-up and 1 full-body. private and only used by our matchmaker.";
 
 export const TPO_ID_TEXT =
-  "last step — send a photo of your driver's license so we can verify your identity. this is kept completely private and is only used for verification.";
+  "last step: send a photo of your driver's license to verify your identity. it's private and only used for verification.";
 
 export const TPO_COMPLETE_TEXT =
   "your application is in! we're reviewing it now and will text you when you're accepted.";
 
 export const TPO_ACCEPTED_TEXT =
-  "great news — you've been accepted to jøsh! we'll reach out when we've found a great match for you.";
+  "good news - you're accepted to jøsh! we'll text when we've found a great match for you.";
 
 export const TPO_REJECTED_TEXT =
   "thanks for applying to jøsh. unfortunately we're not able to accept your application at this time.";
@@ -111,10 +99,10 @@ export const TPO_SCHEDULING_FRIDAY_TEXT =
   "you're matched! before we open chat, does next friday at 7:00 pm work for you for a first date? reply yes or no.";
 
 export const TPO_SCHEDULING_WAITING_TEXT =
-  "thanks — we're checking with your match and will confirm shortly.";
+  "thanks - we're checking with your match and will confirm shortly.";
 
 export const TPO_DATE_PLAN_READY_TEXT_PREFIX =
-  "great — you're both confirmed. here's your suggested date:";
+  "great - you're both confirmed. here's your suggested date:";
 
 export const TPO_DATE_ENDED_TEXT =
   "your current match conversation has ended. we'll let you know when we have another great match for you!";
@@ -123,4 +111,4 @@ export const TPO_DEFAULT_REPLY =
   "thanks for reaching out! we'll be in touch.";
 
 export const TPO_NO_ACTIVE_DATE =
-  "you don't have an active match right now. sit tight — we'll text you when we find someone great!";
+  "you don't have an active match right now. sit tight - we'll text you when we find someone great!";

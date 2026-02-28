@@ -9,7 +9,6 @@ export interface AboutStructured {
   work: string | null;
   hobbies: string[];
   friendDescription: string | null;
-  humorStyle: string | null;
   introExtro: string | null;
   weekdaySocialLevel: string | null;
   weekendSocialLevel: string | null;
@@ -17,7 +16,6 @@ export interface AboutStructured {
   smoking: string | null;
   sleepSchedule: string | null;
   activityLevel: string | null;
-  fitnessImportance: string | null;
   fridayNight: string | null;
   sunday: string | null;
   homeCleanliness: string | null;
@@ -28,6 +26,8 @@ export interface AboutStructured {
   personalValues: string[];
   relationshipIntent: string | null;
   boundaries: string[];
+  kidsMentioned: string | null;
+  petsMentioned: string | null;
 }
 
 export interface PreferencesStructured {
@@ -40,12 +40,10 @@ export interface PreferencesStructured {
   stylePreferences: string[];
   groomingPreferences: string[];
   tattoosPiercingsPreference: string | null;
-  fitnessPreference: string | null;
   voiceAccentPreferences: string[];
   raceEthnicityPreferences: string[];
   jobAmbitionPreferences: string[];
   personalityTraits: string[];
-  humorStyle: string | null;
   socialEnergyPreference: string | null;
   religionCompatibility: string | null;
   politicalCompatibility: string | null;
@@ -75,7 +73,6 @@ const EMPTY_ABOUT: AboutStructured = {
   work: null,
   hobbies: [],
   friendDescription: null,
-  humorStyle: null,
   introExtro: null,
   weekdaySocialLevel: null,
   weekendSocialLevel: null,
@@ -83,7 +80,6 @@ const EMPTY_ABOUT: AboutStructured = {
   smoking: null,
   sleepSchedule: null,
   activityLevel: null,
-  fitnessImportance: null,
   fridayNight: null,
   sunday: null,
   homeCleanliness: null,
@@ -94,6 +90,8 @@ const EMPTY_ABOUT: AboutStructured = {
   personalValues: [],
   relationshipIntent: null,
   boundaries: [],
+  kidsMentioned: null,
+  petsMentioned: null,
 };
 
 const EMPTY_PREFERENCES: PreferencesStructured = {
@@ -106,12 +104,10 @@ const EMPTY_PREFERENCES: PreferencesStructured = {
   stylePreferences: [],
   groomingPreferences: [],
   tattoosPiercingsPreference: null,
-  fitnessPreference: null,
   voiceAccentPreferences: [],
   raceEthnicityPreferences: [],
   jobAmbitionPreferences: [],
   personalityTraits: [],
-  humorStyle: null,
   socialEnergyPreference: null,
   religionCompatibility: null,
   politicalCompatibility: null,
@@ -150,14 +146,73 @@ const LEADING_PHRASE_PREFIXES = [
   "someone that's ",
 ];
 
+function isWhitespaceChar(char: string): boolean {
+  return (
+    char === " " ||
+    char === "\n" ||
+    char === "\t" ||
+    char === "\r" ||
+    char === "\f" ||
+    char === "\v"
+  );
+}
+
+function collapseWhitespace(value: string): string {
+  let out = "";
+  let inWhitespace = false;
+  for (const char of value.trim()) {
+    if (isWhitespaceChar(char)) {
+      if (!inWhitespace && out.length > 0) {
+        out += " ";
+      }
+      inWhitespace = true;
+      continue;
+    }
+    out += char;
+    inWhitespace = false;
+  }
+  return out;
+}
+
+function stripTrailingPunctuation(value: string): string {
+  let end = value.length;
+  while (end > 0 && ".,!?;:".includes(value[end - 1])) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+function stripMarkdownCodeFence(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("```")) return trimmed;
+
+  const lines = trimmed.split("\n");
+  if (lines.length < 2) return trimmed;
+
+  const contentLines = lines.slice(1);
+  const lastLine = contentLines[contentLines.length - 1]?.trim();
+  if (lastLine === "```") {
+    contentLines.pop();
+  }
+  return contentLines.join("\n").trim();
+}
+
 function normalizeBadgePhrase(value: string): string | null {
-  let normalized = value.trim().toLowerCase().replace(/[.,!?;:]+$/g, "");
+  let normalized = stripTrailingPunctuation(value.trim().toLowerCase());
   if (!normalized) return null;
 
-  normalized = normalized
-    .replace(/^i(?:'m| am)\s+/, "")
-    .replace(/^(a|an|the)\s+/, "")
-    .replace(/\s+/g, " ");
+  if (normalized.startsWith("i'm ")) {
+    normalized = normalized.slice(4);
+  } else if (normalized.startsWith("i am ")) {
+    normalized = normalized.slice(5);
+  }
+  for (const article of ["a ", "an ", "the "]) {
+    if (normalized.startsWith(article)) {
+      normalized = normalized.slice(article.length);
+      break;
+    }
+  }
+  normalized = collapseWhitespace(normalized);
 
   for (const prefix of LEADING_PHRASE_PREFIXES) {
     if (normalized.startsWith(prefix)) {
@@ -187,7 +242,7 @@ function asStringOrNull(value: unknown): string | null {
 
 function parseStructuredProfile(raw: string): StructuredProfile {
   try {
-    const cleaned = raw.replace(/```json\n?|```/g, "").trim();
+    const cleaned = stripMarkdownCodeFence(raw);
     const parsed = JSON.parse(cleaned) as Record<string, unknown>;
     const aboutRaw =
       parsed.about && typeof parsed.about === "object"
@@ -208,7 +263,6 @@ function parseStructuredProfile(raw: string): StructuredProfile {
         work: asStringOrNull(aboutRaw.work),
         hobbies: asStringArray(aboutRaw.hobbies),
         friendDescription: asStringOrNull(aboutRaw.friendDescription),
-        humorStyle: asStringOrNull(aboutRaw.humorStyle),
         introExtro: asStringOrNull(aboutRaw.introExtro),
         weekdaySocialLevel: asStringOrNull(aboutRaw.weekdaySocialLevel),
         weekendSocialLevel: asStringOrNull(aboutRaw.weekendSocialLevel),
@@ -216,7 +270,6 @@ function parseStructuredProfile(raw: string): StructuredProfile {
         smoking: asStringOrNull(aboutRaw.smoking),
         sleepSchedule: asStringOrNull(aboutRaw.sleepSchedule),
         activityLevel: asStringOrNull(aboutRaw.activityLevel),
-        fitnessImportance: asStringOrNull(aboutRaw.fitnessImportance),
         fridayNight: asStringOrNull(aboutRaw.fridayNight),
         sunday: asStringOrNull(aboutRaw.sunday),
         homeCleanliness: asStringOrNull(aboutRaw.homeCleanliness),
@@ -229,6 +282,8 @@ function parseStructuredProfile(raw: string): StructuredProfile {
         personalValues: asStringArray(aboutRaw.personalValues),
         relationshipIntent: asStringOrNull(aboutRaw.relationshipIntent),
         boundaries: asStringArray(aboutRaw.boundaries),
+        kidsMentioned: asStringOrNull(aboutRaw.kidsMentioned),
+        petsMentioned: asStringOrNull(aboutRaw.petsMentioned),
       },
       preferences: {
         summary: asStringOrNull(preferencesRaw.summary),
@@ -244,7 +299,6 @@ function parseStructuredProfile(raw: string): StructuredProfile {
         tattoosPiercingsPreference: asStringOrNull(
           preferencesRaw.tattoosPiercingsPreference
         ),
-        fitnessPreference: asStringOrNull(preferencesRaw.fitnessPreference),
         voiceAccentPreferences: asStringArray(
           preferencesRaw.voiceAccentPreferences
         ),
@@ -255,7 +309,6 @@ function parseStructuredProfile(raw: string): StructuredProfile {
           preferencesRaw.jobAmbitionPreferences
         ),
         personalityTraits: asStringArray(preferencesRaw.personalityTraits),
-        humorStyle: asStringOrNull(preferencesRaw.humorStyle),
         socialEnergyPreference: asStringOrNull(
           preferencesRaw.socialEnergyPreference
         ),
@@ -329,7 +382,6 @@ Return ONLY JSON with this exact shape:
     "work": string | null,
     "hobbies": string[],
     "friendDescription": string | null,
-    "humorStyle": string | null,
     "introExtro": string | null,
     "weekdaySocialLevel": string | null,
     "weekendSocialLevel": string | null,
@@ -337,7 +389,6 @@ Return ONLY JSON with this exact shape:
     "smoking": string | null,
     "sleepSchedule": string | null,
     "activityLevel": string | null,
-    "fitnessImportance": string | null,
     "fridayNight": string | null,
     "sunday": string | null,
     "homeCleanliness": string | null,
@@ -347,7 +398,9 @@ Return ONLY JSON with this exact shape:
     "planningStyle": string | null,
     "personalValues": string[],
     "relationshipIntent": string | null,
-    "boundaries": string[]
+    "boundaries": string[],
+    "kidsMentioned": string | null,
+    "petsMentioned": string | null
   },
   "preferences": {
     "summary": string | null,
@@ -359,12 +412,10 @@ Return ONLY JSON with this exact shape:
     "stylePreferences": string[],
     "groomingPreferences": string[],
     "tattoosPiercingsPreference": string | null,
-    "fitnessPreference": string | null,
     "voiceAccentPreferences": string[],
     "raceEthnicityPreferences": string[],
     "jobAmbitionPreferences": string[],
     "personalityTraits": string[],
-    "humorStyle": string | null,
     "socialEnergyPreference": string | null,
     "religionCompatibility": string | null,
     "politicalCompatibility": string | null,
@@ -429,10 +480,6 @@ export function mergeStructuredProfilePreservingExisting(
         nextProfile.about.friendDescription,
         existing.about.friendDescription
       ),
-      humorStyle: chooseString(
-        nextProfile.about.humorStyle,
-        existing.about.humorStyle
-      ),
       introExtro: chooseString(
         nextProfile.about.introExtro,
         existing.about.introExtro
@@ -454,10 +501,6 @@ export function mergeStructuredProfilePreservingExisting(
       activityLevel: chooseString(
         nextProfile.about.activityLevel,
         existing.about.activityLevel
-      ),
-      fitnessImportance: chooseString(
-        nextProfile.about.fitnessImportance,
-        existing.about.fitnessImportance
       ),
       fridayNight: chooseString(
         nextProfile.about.fridayNight,
@@ -495,6 +538,14 @@ export function mergeStructuredProfilePreservingExisting(
       boundaries: chooseStringArray(
         nextProfile.about.boundaries,
         existing.about.boundaries
+      ),
+      kidsMentioned: chooseString(
+        nextProfile.about.kidsMentioned,
+        existing.about.kidsMentioned
+      ),
+      petsMentioned: chooseString(
+        nextProfile.about.petsMentioned,
+        existing.about.petsMentioned
       ),
     },
     preferences: {
@@ -534,10 +585,6 @@ export function mergeStructuredProfilePreservingExisting(
         nextProfile.preferences.tattoosPiercingsPreference,
         existing.preferences.tattoosPiercingsPreference
       ),
-      fitnessPreference: chooseString(
-        nextProfile.preferences.fitnessPreference,
-        existing.preferences.fitnessPreference
-      ),
       voiceAccentPreferences: chooseStringArray(
         nextProfile.preferences.voiceAccentPreferences,
         existing.preferences.voiceAccentPreferences
@@ -553,10 +600,6 @@ export function mergeStructuredProfilePreservingExisting(
       personalityTraits: chooseStringArray(
         nextProfile.preferences.personalityTraits,
         existing.preferences.personalityTraits
-      ),
-      humorStyle: chooseString(
-        nextProfile.preferences.humorStyle,
-        existing.preferences.humorStyle
       ),
       socialEnergyPreference: chooseString(
         nextProfile.preferences.socialEnergyPreference,

@@ -93,14 +93,14 @@ export default function Home() {
             className="w-[350px] rounded-2xl bg-gradient-to-b from-[#2563eb] to-[#90A9F1] p-[1px] shadow-lg"
           >
             <div className="relative flex min-h-[340px] flex-col rounded-2xl bg-gradient-to-b from-[#1d4ed8] to-[#90A9F1] px-5 pt-6 pb-5 text-white">
-              <div className="mb-5 flex justify-center">
-                <div className="rounded-xl border border-white/25 bg-white/20 px-3 py-1">
-                  <p className="text-xs">welcome to jøsh</p>
+              <div className="opacity-0 mb-5 flex justify-center">
+                <div className="rounded-xl border border-white/25 px-3 py-1">
+                  <p className="text-xs">built with mistral</p>
                 </div>
               </div>
 
               <div className="flex flex-1 flex-col items-center justify-center">
-                <p className="mb-5 text-center text-2xl leading-9">
+                <p className="mb-5 font-medium text-center text-2xl leading-9">
                   no swiping. no chit-chat.
                   <br />
                   no joshes.
@@ -120,7 +120,7 @@ export default function Home() {
                     maxLength={14}
                     autoComplete="tel-national"
                     disabled={formState === "submitting"}
-                    className="w-[126px] bg-transparent text-white outline-none placeholder:text-[#dbeafe]"
+                    className="w-[126px] bg-transparent text-white outline-none placeholder:text-white/30"
                   />
                 </div>
               </div>
@@ -129,17 +129,14 @@ export default function Home() {
                 <button
                   type="submit"
                   disabled={formState === "submitting" || phone.length !== 10}
-                  className="flex h-full w-full items-center justify-center rounded-lg bg-[#1e40af] text-xl text-white transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex font-medium h-full w-full items-center justify-center rounded-lg bg-white text-xl text-[#1e40af] hover:opacity-85 disabled:cursor-not-allowed disabled:bg-white/10 disabled:text-white/30 transition-all"
                 >
                   {formState === "submitting" ? "sending..." : "get started"}
                 </button>
               </div>
               {errorMsg && (
                 <p
-                  className={`pt-2 text-center text-xs ${
-                    errorMsg.includes("already signed up")
-                      ? "text-[#1e40af]"
-                      : "text-red-100"
+                  className={`pt-2 text-center text-xs text-white
                   }`}
                 >
                   {errorMsg}
@@ -150,14 +147,14 @@ export default function Home() {
 
           <div className="w-[350px] rounded-2xl bg-gradient-to-b from-[#2563eb] to-[#90A9F1] p-[1px] shadow-lg">
             <div className="relative flex min-h-[340px] flex-col rounded-2xl bg-gradient-to-b from-[#1d4ed8] to-[#90A9F1] px-5 pt-6 pb-5 text-white">
-              <div className="mb-5 flex justify-center">
+              <div className="opacity-0 mb-5 flex justify-center">
                 <div className="rounded-xl border border-white/25 bg-white/20 px-3 py-1">
                   <p className="text-xs">welcome to jøsh</p>
                 </div>
               </div>
 
               <div className="flex flex-1 flex-col items-center justify-center text-center">
-                <p className="text-2xl leading-9">check your texts!</p>
+                <p className="text-2xl leading-9">now check your texts.</p>
                 <p className="mt-3 text-sm text-white/90">
                   we just sent you a message to get started.
                 </p>
@@ -181,10 +178,10 @@ export default function Home() {
       </Tilt>
 
       <div className="mt-5 w-full max-w-[300px] px-2">
-        <p className="text-center text-[11px] leading-[18px] text-[#22324a9e]">
+        <p className="text-center text-[11px] leading-[18px] text-white/50">
           by submitting, you agree to receive texts from jøsh.
         </p>
-        <p className="text-center text-[11px] leading-[18px] text-[#22324a9e]">
+        <p className="text-center text-[11px] leading-[18px] text-white/50">
           msg & data rates may apply.
         </p>
       </div>
