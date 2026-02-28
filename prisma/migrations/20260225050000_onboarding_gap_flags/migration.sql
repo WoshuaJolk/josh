@@ -1,0 +1,3 @@
+ALTER TABLE "TpoUser"
+  ADD COLUMN IF NOT EXISTS "aboutFollowupAsked" BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS "preferencesFollowupAsked" BOOLEAN NOT NULL DEFAULT false;

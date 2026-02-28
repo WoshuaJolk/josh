@@ -1,0 +1,253 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model MutualLike {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  from String
+  to   String
+
+  fromName String
+  toName   String
+}
+
+model MutualTestUser {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  phoneNumber String @unique
+}
+
+model Photo {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  person   Person
+  views    Int    @default(0)
+  elo      Int    @default(1500)
+  menElo   Int    @default(1500)
+  womenElo Int    @default(1500)
+
+  photoTransform PhotoTransform?
+
+  leftVotes  Vote[] @relation("LeftPhoto")
+  rightVotes Vote[] @relation("RightPhoto")
+
+  label PhotoLabel?
+  ick   Ick[]
+}
+
+model PhotoLabel {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  photoId String @unique
+  photo   Photo  @relation(fields: [photoId], references: [id], onDelete: Cascade)
+
+  labels Json
+}
+
+model Ick {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  photoId String
+  photo   Photo  @relation(fields: [photoId], references: [id], onDelete: Cascade)
+
+  userId String
+
+  @@unique([photoId, userId])
+}
+
+model PhotoTransform {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  photoId String @unique
+  photo   Photo  @relation(fields: [photoId], references: [id], onDelete: Cascade)
+
+  x     Float
+  y     Float
+  scale Float
+}
+
+model Vote {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  person       Person
+  leftPhotoId  String
+  leftPhoto    Photo  @relation(name: "LeftPhoto", fields: [leftPhotoId], references: [id], onDelete: Cascade)
+  rightPhotoId String
+  rightPhoto   Photo  @relation(name: "RightPhoto", fields: [rightPhotoId], references: [id], onDelete: Cascade)
+  winnerSide   Side
+
+  timeTaken Float // in seconds
+}
+
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  name      String  @default("Anonymous")
+  gender    Gender  @default(OTHER)
+  onboarded Boolean @default(false)
+
+  votes Vote[]
+}
+
+model BannedUser {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  userId    String @default("")
+  ipAddress String @default("")
+}
+
+model Shot {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  person       Person
+  name         String
+  socialHandle String
+  city         String
+  pickupLine   String
+  photoUrl     String
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum Side {
+  LEFT
+  RIGHT
+}
+
+enum Person {
+  JOSH
+  JONATHAN
+}
+
+// TPO (Time, Place, Occasion) models
+
+model TpoUser {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  phoneNumber    String             @unique
+  status         TpoUserStatus      @default(ONBOARDING)
+  onboardingStep TpoOnboardingStep  @default(INTRO_SENT)
+
+  aboutMe     String?
+  onboardingQuestionIndex Int @default(0)
+  aboutFollowupAsked Boolean @default(false)
+  aboutFollowupCount Int @default(0)
+  preferences String?
+  preferencesFollowupAsked Boolean @default(false)
+  preferencesFollowupCount Int @default(0)
+  city        String?
+  structuredProfile Json?
+  photoUrls   String[]
+  idPhotoUrl  String?
+
+  dlName   String?
+  dlAge    Int?
+  dlHeight String?
+
+  datesAsA TpoDate[] @relation("DateUserA")
+  datesAsB TpoDate[] @relation("DateUserB")
+}
+
+model TpoDate {
+  id        String        @id @default(cuid())
+  createdAt DateTime      @default(now())
+  status    TpoDateStatus @default(ACTIVE)
+  endedAt   DateTime?
+
+  portalEnabled  Boolean  @default(false)
+  schedulingPhase TpoSchedulingPhase @default(PROPOSING_TO_A)
+  schedulingAttemptCount Int @default(0)
+  lastSchedulingMessageAt DateTime?
+  schedulingEscalatedAt DateTime?
+  schedulingFailedReason String?
+  proposedSlot   String?
+  userAAvailable Boolean?
+  userBAvailable Boolean?
+  agreedTime     String?
+  suggestedPlace String?
+
+  userAId String
+  userA   TpoUser @relation("DateUserA", fields: [userAId], references: [id])
+
+  userBId String
+  userB   TpoUser @relation("DateUserB", fields: [userBId], references: [id])
+
+  messages TpoMessage[]
+}
+
+model TpoMessage {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  dateId String
+  date   TpoDate @relation(fields: [dateId], references: [id])
+
+  fromPhone String
+  toPhone   String
+  body      String
+  blocked   Boolean @default(false)
+}
+
+enum TpoUserStatus {
+  ONBOARDING
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  BANNED
+}
+
+enum TpoOnboardingStep {
+  INTRO_SENT
+  AWAITING_ABOUT
+  AWAITING_PREFERENCES
+  AWAITING_CITY
+  AWAITING_PHOTOS
+  AWAITING_ID
+  COMPLETE
+}
+
+enum TpoDateStatus {
+  ACTIVE
+  ENDED
+}
+
+enum TpoSchedulingPhase {
+  PROPOSING_TO_A
+  WAITING_FOR_A_REPLY
+  PROPOSING_TO_B
+  WAITING_FOR_B_REPLY
+  WAITING_FOR_A_ALTERNATIVE
+  WAITING_FOR_B_ALTERNATIVE
+  AGREED
+  FAILED
+  ESCALATED
+}
