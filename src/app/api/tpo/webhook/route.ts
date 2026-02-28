@@ -44,6 +44,11 @@ interface SurgeAttachment {
   download_url?: string;
 }
 
+interface AttachmentDownloadResult {
+  buffer: Buffer;
+  contentType: string;
+}
+
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number
@@ -67,6 +72,38 @@ const JPEG_QUALITY = 70;
 const MAX_SCHEDULING_ATTEMPTS = 6;
 const SCHEDULING_STALE_MS = 24 * 60 * 60 * 1000;
 
+async function downloadAttachment(url: string): Promise<AttachmentDownloadResult> {
+  const surgeApiKey = process.env.SURGE_API_KEY;
+
+  const unauthRes = await fetch(url);
+  if (unauthRes.ok) {
+    return {
+      buffer: Buffer.from(await unauthRes.arrayBuffer()),
+      contentType: unauthRes.headers.get("content-type") ?? "application/octet-stream",
+    };
+  }
+
+  if (!surgeApiKey) {
+    throw new Error(
+      `Failed to download attachment from ${url} (status ${unauthRes.status})`
+    );
+  }
+
+  const authRes = await fetch(url, {
+    headers: { Authorization: `Bearer ${surgeApiKey}` },
+  });
+  if (!authRes.ok) {
+    throw new Error(
+      `Failed to download attachment from ${url} (statuses: ${unauthRes.status}, ${authRes.status})`
+    );
+  }
+
+  return {
+    buffer: Buffer.from(await authRes.arrayBuffer()),
+    contentType: authRes.headers.get("content-type") ?? "application/octet-stream",
+  };
+}
+
 async function uploadAttachmentToSupabase(
   attachment: SurgeAttachment,
   folder: string,
@@ -81,13 +118,11 @@ async function uploadAttachmentToSupabase(
     throw new Error("Attachment missing URL");
   }
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to download attachment from ${url}`);
-
-  const rawBuffer = Buffer.from(await res.arrayBuffer());
+  const downloaded = await downloadAttachment(url);
+  const rawBuffer = downloaded.buffer;
   const inboundContentType =
     attachment.type ??
-    res.headers.get("content-type") ??
+    downloaded.contentType ??
     "application/octet-stream";
 
   let uploadBuffer = rawBuffer;
@@ -480,11 +515,22 @@ async function handleOnboarding(
 
       try {
         const idAttachment = attachments[0];
+        const idAttachmentSource =
+          idAttachment?.url
+            ? "url"
+            : idAttachment?.media_url
+              ? "media_url"
+              : idAttachment?.file_url
+                ? "file_url"
+                : idAttachment?.download_url
+                  ? "download_url"
+                  : "none";
         const idAttachmentUrl =
           idAttachment?.url ??
           idAttachment?.media_url ??
           idAttachment?.file_url ??
           idAttachment?.download_url;
+        console.log("[tpo/webhook] ID attachment source:", idAttachmentSource);
         if (!idAttachmentUrl) {
           await sendSms(
             phoneNumber,
@@ -494,19 +540,30 @@ async function handleOnboarding(
           return;
         }
 
-        const idUrl = await uploadAttachmentToSupabase(
-          idAttachment,
-          "ids",
-          phoneNumber
-        );
+        let idUrl = idAttachmentUrl;
+        try {
+          idUrl = await uploadAttachmentToSupabase(
+            idAttachment,
+            "ids",
+            phoneNumber
+          );
+        } catch (uploadErr) {
+          // Keep onboarding unblocked if storage upload fails; admin signed-url
+          // endpoint can render absolute URLs directly.
+          console.error(
+            "[tpo/webhook] ID upload to Supabase failed; falling back to source URL:",
+            uploadErr
+          );
+          console.log(
+            "[tpo/webhook] ID fallback active; storing source URL from:",
+            idAttachmentSource
+          );
+        }
 
         let dlImageBase64: string | null = null;
         try {
-          const dlImageRes = await fetch(idAttachmentUrl);
-          if (dlImageRes.ok) {
-            const dlImageBuffer = Buffer.from(await dlImageRes.arrayBuffer());
-            dlImageBase64 = dlImageBuffer.toString("base64");
-          }
+          const dlImage = await downloadAttachment(idAttachmentUrl);
+          dlImageBase64 = dlImage.buffer.toString("base64");
         } catch (imageErr) {
           console.error("[tpo/webhook] ID image fetch error (non-blocking):", imageErr);
         }

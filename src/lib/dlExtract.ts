@@ -11,9 +11,19 @@ export interface DlExtractedData {
 function normalizeFullName(value: unknown): string | null {
   if (typeof value !== "string") return null;
 
-  const cleaned = value
-    .replace(/\s+/g, " ")
-    .trim();
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+
+  // Normalize "LAST, FIRST MIDDLE" to "FIRST MIDDLE LAST".
+  if (cleaned.includes(",")) {
+    const [rawLast, rawRest] = cleaned.split(",", 2);
+    const last = rawLast?.trim();
+    const rest = rawRest?.trim();
+    if (last && rest) {
+      const reordered = `${rest} ${last}`.replace(/\s+/g, " ").trim();
+      if (reordered.split(" ").length >= 2) return reordered;
+    }
+  }
 
   // Require at least first + last name.
   if (cleaned.split(" ").length < 2) return null;
@@ -103,7 +113,7 @@ export async function extractDriversLicenseData(
         {
           role: "system",
           content: `You extract structured data from US driver's license images. Return ONLY valid JSON with these fields:
-- "name": FULL legal first and last name exactly as shown on the driver's license. Include middle name only if present (string or null). Do not return only first name.
+- "name": FULL legal name in natural order: FIRST [MIDDLE] LAST. If the license prints LAST, FIRST MIDDLE, reorder it to FIRST [MIDDLE] LAST. Include middle name only if present (string or null). Do not return only first name.
 - "dateOfBirth": date of birth exactly as shown on the license (string or null)
 - "height": height as shown on the license, e.g. "5'10\"" (string or null)
 
@@ -114,7 +124,7 @@ If you cannot read a field, set it to null. Do not include any text outside the 
           content: [
             {
               type: "text",
-              text: "Extract the FULL first and last name, date of birth, and height from this driver's license.",
+              text: "Extract the full legal name in FIRST [MIDDLE] LAST order, plus date of birth and height from this driver's license.",
             },
             {
               type: "image",

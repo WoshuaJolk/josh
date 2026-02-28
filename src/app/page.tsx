@@ -101,9 +101,9 @@ export default function Home() {
 
               <div className="flex flex-1 flex-col items-center justify-center">
                 <p className="mb-5 text-center text-2xl leading-9">
-                  no joshes.
+                  no swiping. no chit-chat.
                   <br />
-                  no swiping, no chit-chat.
+                  no joshes.
                 </p>
 
                 <div className="flex h-10 items-center text-xl">
@@ -120,7 +120,7 @@ export default function Home() {
                     maxLength={14}
                     autoComplete="tel-national"
                     disabled={formState === "submitting"}
-                    className="w-[126px] bg-transparent text-white outline-none placeholder:text-[#dbeafe]/55"
+                    className="w-[126px] bg-transparent text-white outline-none placeholder:text-[#dbeafe]"
                   />
                 </div>
               </div>
