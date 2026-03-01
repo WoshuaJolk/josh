@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import sharp from "sharp";
-import { Prisma } from "@prisma/client";
+import { Prisma, TpoDate, TpoUser } from "@prisma/client";
 import { db } from "@/server/db";
 import { validateSurgeSignature } from "@/lib/surgeWebhook";
 import { sendSms } from "@/lib/surgeSend";
@@ -22,6 +22,10 @@ import {
   TPO_DEFAULT_REPLY,
   TPO_NO_ACTIVE_DATE,
 } from "@/lib/tpoConstants";
+import {
+  analyzeSchedulingResponse,
+  suggestDateSpot,
+} from "@/lib/tpoScheduling";
 
 const supabase = createClient(
   process.env.SUPABASE_PROJECT_URL!,
@@ -683,6 +687,229 @@ async function handleOnboarding(
   }
 }
 
+type ActiveDateWithUsers = TpoDate & {
+  userA: TpoUser;
+  userB: TpoUser;
+};
+
+async function handleScheduling(
+  senderPhone: string,
+  messageBody: string | null,
+  activeDate: NonNullable<ActiveDateWithUsers>
+) {
+  if (!messageBody?.trim()) return;
+
+  const isUserA = activeDate.userA.phoneNumber === senderPhone;
+  const phase = activeDate.schedulingPhase;
+
+  // Only the "expected actor" for the current phase can advance state
+  const isExpectedActor =
+    (isUserA &&
+      (phase === "WAITING_FOR_A_REPLY" ||
+        phase === "WAITING_FOR_A_ALTERNATIVE")) ||
+    (!isUserA &&
+      (phase === "WAITING_FOR_B_REPLY" ||
+        phase === "WAITING_FOR_B_ALTERNATIVE"));
+
+  // Helper: send an SMS and log it as a system message
+  const sendAndLog = async (toPhone: string, body: string) => {
+    await sendSms(toPhone, body, { skipProfanityFilter: true });
+    await db.tpoMessage.create({
+      data: {
+        dateId: activeDate.id,
+        fromPhone: "system",
+        toPhone,
+        body,
+        blocked: false,
+      },
+    });
+  };
+
+  if (!isExpectedActor) {
+    // Log the incoming message, reply with a hold message, don't advance state
+    await db.tpoMessage.create({
+      data: {
+        dateId: activeDate.id,
+        fromPhone: senderPhone,
+        toPhone: "system",
+        body: messageBody,
+        blocked: false,
+      },
+    });
+    await sendAndLog(senderPhone, "just checking with your match — hang tight!");
+    return;
+  }
+
+  // Load the scheduling conversation history for this user (all prior messages)
+  const pastMessages = await db.tpoMessage.findMany({
+    where: {
+      dateId: activeDate.id,
+      OR: [{ fromPhone: senderPhone }, { toPhone: senderPhone }],
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  // Build conversation context: past bot↔user messages + the current incoming message
+  const conversation = [
+    ...pastMessages.map((msg) => ({
+      role: (msg.fromPhone === "system" ? "assistant" : "user") as
+        | "assistant"
+        | "user",
+      content: msg.body,
+    })),
+    { role: "user" as const, content: messageBody },
+  ];
+
+  // Log the incoming user message
+  await db.tpoMessage.create({
+    data: {
+      dateId: activeDate.id,
+      fromPhone: senderPhone,
+      toPhone: "system",
+      body: messageBody,
+      blocked: false,
+    },
+  });
+
+  const today = new Date();
+  const analysis = await analyzeSchedulingResponse({
+    conversation,
+    proposedSlot: activeDate.proposedSlot,
+    today,
+  });
+
+  const otherUser = isUserA ? activeDate.userB : activeDate.userA;
+
+  // Handle "too soon" before phase logic
+  if (analysis.tooSoon && analysis.proposedAlternative) {
+    const minDate = new Date(today);
+    minDate.setDate(minDate.getDate() + 2);
+    const minDateStr = minDate.toLocaleDateString("en-US", {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    });
+    await sendAndLog(
+      senderPhone,
+      `that's a bit soon — can you pick something after ${minDateStr}?`
+    );
+    return;
+  }
+
+  // Handle clarification before phase logic
+  if (analysis.needsClarification && analysis.clarificationQuestion) {
+    await sendAndLog(senderPhone, analysis.clarificationQuestion);
+    return;
+  }
+
+  // Helper: notify B for the first time if they haven't been messaged yet
+  const notifyBIfFirst = async () => {
+    const priorBCount = await db.tpoMessage.count({
+      where: { dateId: activeDate.id, toPhone: otherUser.phoneNumber },
+    });
+    if (priorBCount === 0) {
+      await sendAndLog(otherUser.phoneNumber, "you've been matched!");
+    }
+  };
+
+  switch (phase) {
+    case "WAITING_FOR_A_REPLY":
+    case "WAITING_FOR_A_ALTERNATIVE": {
+      if (analysis.accepted && phase === "WAITING_FOR_A_REPLY") {
+        // A accepted the proposed time → forward to B
+        await sendAndLog(senderPhone, "perfect — checking with your match now!");
+        await notifyBIfFirst();
+        const bMsg = `your match is free on ${activeDate.proposedSlot ?? "the proposed time"}. does that work for you?`;
+        await sendAndLog(otherUser.phoneNumber, bMsg);
+        await db.tpoDate.update({
+          where: { id: activeDate.id },
+          data: { schedulingPhase: "WAITING_FOR_B_REPLY" },
+        });
+      } else if (analysis.proposedAlternative) {
+        // A proposed a specific alternate time → forward to B
+        const newSlot = analysis.proposedAlternative;
+        await sendAndLog(senderPhone, "perfect — checking with your match now!");
+        await notifyBIfFirst();
+        const bMsg = `your match is free on ${newSlot}. does that work for you?`;
+        await sendAndLog(otherUser.phoneNumber, bMsg);
+        await db.tpoDate.update({
+          where: { id: activeDate.id },
+          data: { schedulingPhase: "WAITING_FOR_B_REPLY", proposedSlot: newSlot },
+        });
+      } else {
+        // Declined without proposing a time — ask for one
+        await sendAndLog(
+          senderPhone,
+          "no worries — what time works better for you?"
+        );
+        if (phase !== "WAITING_FOR_A_ALTERNATIVE") {
+          await db.tpoDate.update({
+            where: { id: activeDate.id },
+            data: { schedulingPhase: "WAITING_FOR_A_ALTERNATIVE" },
+          });
+        }
+      }
+      break;
+    }
+
+    case "WAITING_FOR_B_REPLY":
+    case "WAITING_FOR_B_ALTERNATIVE": {
+      if (analysis.accepted) {
+        // Both agreed — generate date spot and announce
+        const city =
+          activeDate.userA.city ?? activeDate.userB.city ?? "your city";
+        const agreedTime = activeDate.proposedSlot ?? "your agreed time";
+        const venue = await suggestDateSpot({
+          userAProfile: activeDate.userA.structuredProfile as object | null,
+          userBProfile: activeDate.userB.structuredProfile as object | null,
+          city,
+          agreedTime,
+        });
+
+        const confirmation = `you're both confirmed for ${agreedTime}!\n\ndate spot: ${venue}\n\nany messages to this number now go straight to your match. have fun!`;
+
+        await db.tpoDate.update({
+          where: { id: activeDate.id },
+          data: {
+            schedulingPhase: "AGREED",
+            agreedTime,
+            suggestedPlace: venue,
+            portalEnabled: true,
+          },
+        });
+
+        // Send confirmation to both users
+        await sendAndLog(activeDate.userA.phoneNumber, confirmation);
+        await sendAndLog(activeDate.userB.phoneNumber, confirmation);
+      } else if (analysis.proposedAlternative) {
+        // B proposed an alternate — check with A
+        const newSlot = analysis.proposedAlternative;
+        await sendAndLog(senderPhone, "got it — i'll check with your match!");
+        const aMsg = `your match can't do ${activeDate.proposedSlot ?? "that time"}, but is free on ${newSlot}. does that work for you?`;
+        await sendAndLog(otherUser.phoneNumber, aMsg);
+        await db.tpoDate.update({
+          where: { id: activeDate.id },
+          data: { schedulingPhase: "WAITING_FOR_A_REPLY", proposedSlot: newSlot },
+        });
+      } else {
+        // B declined without proposing anything — go back to A for a new time
+        await sendAndLog(senderPhone, "no worries — i'll find another time!");
+        const aMsg = `your match can't do ${activeDate.proposedSlot ?? "that time"}. got another time that works?`;
+        await sendAndLog(otherUser.phoneNumber, aMsg);
+        await db.tpoDate.update({
+          where: { id: activeDate.id },
+          data: { schedulingPhase: "WAITING_FOR_A_ALTERNATIVE" },
+        });
+      }
+      break;
+    }
+
+    default:
+      // Terminal or unhandled phase — don't advance state
+      break;
+  }
+}
+
 async function handleMessageRelay(
   senderPhone: string,
   messageBody: string | null
@@ -773,7 +1000,24 @@ export async function POST(req: NextRequest) {
     }
 
     if (user.status === "APPROVED") {
-      await handleMessageRelay(senderPhone, messageBody);
+      // Check for an active date in the scheduling flow (portal not yet enabled)
+      const schedulingDate = await db.tpoDate.findFirst({
+        where: {
+          status: "ACTIVE",
+          portalEnabled: false,
+          OR: [
+            { userA: { phoneNumber: senderPhone } },
+            { userB: { phoneNumber: senderPhone } },
+          ],
+        },
+        include: { userA: true, userB: true },
+      });
+
+      if (schedulingDate) {
+        await handleScheduling(senderPhone, messageBody, schedulingDate);
+      } else {
+        await handleMessageRelay(senderPhone, messageBody);
+      }
       return NextResponse.json({ ok: true });
     }
 

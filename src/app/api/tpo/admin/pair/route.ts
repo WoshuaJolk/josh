@@ -5,6 +5,7 @@ import {
   INTERNAL_API_KEY_HEADER,
 } from "@/lib/internalApiAuth";
 import { sendSms } from "@/lib/surgeSend";
+import { proposeInitialTimeSlot } from "@/lib/tpoScheduling";
 
 export async function POST(req: NextRequest) {
   try {
@@ -75,11 +76,34 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Only notify A now — B will be notified when A confirms a time
     await sendSms(userA.phoneNumber, "you've been matched!", {
       skipProfanityFilter: true,
     });
-    await sendSms(userB.phoneNumber, "you've been matched!", {
-      skipProfanityFilter: true,
+
+    // Kick off scheduling: propose an initial time to User A
+    const today = new Date();
+    const proposedSlot = await proposeInitialTimeSlot({ today });
+    const proposalMsg = `let's get the date on the calendar. how does ${proposedSlot} work for you?`;
+
+    await db.tpoDate.update({
+      where: { id: date.id },
+      data: {
+        schedulingPhase: "WAITING_FOR_A_REPLY",
+        proposedSlot,
+      },
+    });
+
+    await sendSms(userA.phoneNumber, proposalMsg, { skipProfanityFilter: true });
+
+    await db.tpoMessage.create({
+      data: {
+        dateId: date.id,
+        fromPhone: "system",
+        toPhone: userA.phoneNumber,
+        body: proposalMsg,
+        blocked: false,
+      },
     });
 
     return NextResponse.json({ success: true, dateId: date.id });

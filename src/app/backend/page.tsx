@@ -1,6 +1,11 @@
 "use client";
 
 import { AdminCardModal } from "@/components/AdminCardModal";
+import {
+  PhonePanel,
+  ScheduleSimulator,
+  type ChatMessage as DemoChatMessage,
+} from "@/app/schedule-test/ScheduleSimulator";
 import type { LucideIcon } from "lucide-react";
 import {
   Baby,
@@ -29,7 +34,7 @@ import {
 import Image from "next/image";
 import { useCallback, useEffect, useState } from "react";
 
-type Tab = "approvals" | "pairing" | "onboarding" | "blocked";
+type Tab = "approvals" | "pairing" | "onboarding" | "blocked" | "scheduling";
 type TabCounts = {
   approvals: number;
   pairing: number;
@@ -1117,6 +1122,16 @@ export default function BackendPage() {
 
         <div className="mb-6 flex w-fit gap-1 rounded-lg border border-white/25 p-1">
           <button
+            onClick={() => setTab("onboarding")}
+            className={`rounded-md px-4 py-2 text-sm transition-colors ${
+              tab === "onboarding"
+                ? "bg-white text-[#1d4ed8]"
+                : " text-white/85 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            Onboarding ({tabCounts.onboarding})
+          </button>
+          <button
             onClick={() => setTab("approvals")}
             className={`rounded-md px-4 py-2 text-sm transition-colors ${
               tab === "approvals"
@@ -1137,24 +1152,14 @@ export default function BackendPage() {
             Pairing ({tabCounts.pairing})
           </button>
           <button
-            onClick={() => setTab("onboarding")}
+            onClick={() => setTab("scheduling")}
             className={`rounded-md px-4 py-2 text-sm transition-colors ${
-              tab === "onboarding"
+              tab === "scheduling"
                 ? "bg-white text-[#1d4ed8]"
                 : " text-white/85 hover:bg-white/10 hover:text-white"
             }`}
           >
-            Onboarding ({tabCounts.onboarding})
-          </button>
-          <button
-            onClick={() => setTab("blocked")}
-            className={`rounded-md px-4 py-2 text-sm transition-colors ${
-              tab === "blocked"
-                ? "bg-white text-[#1d4ed8]"
-                : " text-white/85 hover:bg-white/10 hover:text-white"
-            }`}
-          >
-            Blocked ({tabCounts.blocked})
+            Demo
           </button>
         </div>
 
@@ -1162,6 +1167,9 @@ export default function BackendPage() {
         {tab === "pairing" && <PairingTab apiKey={apiKey} />}
         {tab === "onboarding" && <OnboardingTab apiKey={apiKey} />}
         {tab === "blocked" && <BlockedTab apiKey={apiKey} />}
+        {tab === "scheduling" && (
+          <ScheduleSimulator embedded showApiKeyInput={false} />
+        )}
       </div>
     </div>
   );
@@ -1310,6 +1318,19 @@ function DateConversationModal({
   loading: boolean;
   onClose: () => void;
 }) {
+  const userAMessages: DemoChatMessage[] = messages.map((message) => ({
+    id: `${message.id}:A`,
+    role: message.fromPhone === date.userA.phoneNumber ? "user" : "bot",
+    body: message.body,
+    createdAt: message.createdAt,
+  }));
+  const userBMessages: DemoChatMessage[] = messages.map((message) => ({
+    id: `${message.id}:B`,
+    role: message.fromPhone === date.userB.phoneNumber ? "user" : "bot",
+    body: message.body,
+    createdAt: message.createdAt,
+  }));
+
   return (
     <AdminCardModal
       open
@@ -1318,29 +1339,40 @@ function DateConversationModal({
       maxWidthClass="max-w-3xl"
       onClose={onClose}
     >
-      <div className="space-y-3 min-h-0 flex-1">
-        <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-white/20 bg-white/6 p-3 text-xs leading-relaxed text-white/90">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-w-0 space-y-3">
           {loading ? (
-            <p className="text-white/60">loading conversation...</p>
+            <p className="text-xs text-white/60">loading conversation...</p>
           ) : messages.length === 0 ? (
-            <p className="text-white/60">no messages yet</p>
+            <p className="text-xs text-white/60">no messages yet</p>
           ) : (
-            <div className="space-y-2">
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className="rounded-md border border-white/10 bg-black/20 p-2"
-                >
-                  <p className="mb-1 text-[10px] text-white/60">
-                    {message.fromPhone} → {message.toPhone} ·{" "}
-                    {new Date(message.createdAt).toLocaleString()}
-                    {message.blocked ? " · blocked" : ""}
-                  </p>
-                  <p className="whitespace-pre-wrap break-words text-white/90">
-                    {message.body}
-                  </p>
-                </div>
-              ))}
+            <div className="flex min-w-0 gap-3">
+              <PhonePanel
+                label={getDisplayName(date.userA)}
+                phone={date.userA.phoneNumber}
+                messages={userAMessages}
+                inputValue=""
+                onInputChange={() => {}}
+                onSend={() => {}}
+                disabled
+                isActor={false}
+                hideInput
+                messageBubbleStyle="plain"
+                messagesScrollable={false}
+              />
+              <PhonePanel
+                label={getDisplayName(date.userB)}
+                phone={date.userB.phoneNumber}
+                messages={userBMessages}
+                inputValue=""
+                onInputChange={() => {}}
+                onSend={() => {}}
+                disabled
+                isActor={false}
+                hideInput
+                messageBubbleStyle="plain"
+                messagesScrollable={false}
+              />
             </div>
           )}
         </div>
