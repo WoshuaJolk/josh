@@ -1,160 +1,120 @@
 import { generateText } from "ai";
-const MODEL = "openai/gpt-4o-mini";
-const PLACE_SUGGESTION_MAX_CHARS = 120;
 
-type Availability = "yes" | "no" | "unclear";
-type AlternativeParseResult =
-  | { status: "parsed"; canonicalSlot: string }
-  | { status: "clarify"; clarificationQuestion: string };
+const MODEL = "openai/gpt-5";
 
-interface UserSummary {
-  name?: string | null;
-  aboutMe?: string | null;
-  preferences?: string | null;
-  city?: string | null;
-  age?: number | null;
-  height?: string | null;
+export interface SchedulingInterpretation {
+  intent: "accept" | "reject" | "propose_new_time" | "clarify";
+  canonicalSlot?: string;
+  clarificationQuestion?: string;
 }
 
-export async function classifyAvailabilityReply(
-  message: string,
-  proposedSlot: string
-): Promise<Availability> {
-  const normalizedMessage = message.trim().toLowerCase();
-  if (!normalizedMessage) return "unclear";
-
-  // Deterministic fast-paths for common SMS replies.
-  if (/^(yes|yep|yeah|ya|y|works|that works|sounds good|good)$/i.test(normalizedMessage)) {
-    return "yes";
-  }
-  if (
-    /^(no|nope|nah|n|doesn't work|doesnt work|can't|cant|can't do|cant do)$/i.test(
-      normalizedMessage
-    )
-  ) {
-    return "no";
-  }
-
-  if (
-    /\b(yes|yep|yeah|works|sounds good|i can|i'm free|im free)\b/i.test(
-      normalizedMessage
-    ) &&
-    !/\b(no|nope|nah|can't|cant|doesn't work|doesnt work)\b/i.test(
-      normalizedMessage
-    )
-  ) {
-    return "yes";
-  }
-  if (
-    /\b(no|nope|nah|can't|cant|doesn't work|doesnt work|not free)\b/i.test(
-      normalizedMessage
-    )
-  ) {
-    return "no";
-  }
-
-  if (!process.env.AI_GATEWAY_API_KEY) return "unclear";
-
-  try {
-    const { text } = await generateText({
-      model: MODEL,
-      prompt: `Classify this reply to a scheduling prompt.
-Proposed time: ${proposedSlot}
-Reply: "${message}"
-
-Return only one token: yes, no, or unclear.`,
-      maxOutputTokens: 5,
-    });
-
-    const normalized = text.trim().toLowerCase();
-    if (normalized.includes("yes")) return "yes";
-    if (normalized.includes("no")) return "no";
-    return "unclear";
-  } catch {
-    return "unclear";
-  }
-}
-
-export async function normalizeAlternativeTimeSuggestion(params: {
+export async function interpretSchedulingReply(params: {
   message: string;
+  proposedSlot: string;
   city?: string | null;
   recentMessages?: string[];
-}): Promise<AlternativeParseResult> {
-  const { message, city, recentMessages = [] } = params;
-  const normalized = message.trim();
-  const trimmedHistory = recentMessages
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const historyContext =
-    trimmedHistory.length > 0 ? [...trimmedHistory, normalized].join(" | ") : normalized;
-  if (!normalized) {
+  referenceIso?: string;
+  senderLabel?: "A" | "B";
+}): Promise<SchedulingInterpretation> {
+  const {
+    message,
+    proposedSlot,
+    city,
+    recentMessages = [],
+    referenceIso,
+    senderLabel,
+  } = params;
+  const latestMessage = message.trim();
+  if (!latestMessage) {
     return {
-      status: "clarify",
-      clarificationQuestion:
-        "can you share a specific day and time that works better for you?",
+      intent: "clarify",
+      clarificationQuestion: "can you share a day and time that works for you?",
     };
   }
+  const hasAiKey = Boolean(process.env.AI_GATEWAY_API_KEY);
 
-  if (!process.env.AI_GATEWAY_API_KEY) {
-    if (historyContext.length >= 8) {
-      return { status: "parsed", canonicalSlot: historyContext };
-    }
-    return {
-      status: "clarify",
-      clarificationQuestion:
-        "can you send a clearer time suggestion, like friday at 8pm?",
-    };
-  }
-
+  const history = recentMessages.map((item) => item.trim()).filter(Boolean);
   try {
+    if (!hasAiKey) throw new Error("ai-key-missing");
     const { text } = await generateText({
       model: MODEL,
-      prompt: `Parse this dating scheduling reply into one normalized proposal.
-Latest reply: "${message}"
-Recent replies from same sender (oldest -> newest): ${trimmedHistory.length > 0 ? trimmedHistory.map((entry) => `"${entry}"`).join(", ") : "none"}
+      prompt: `Interpret one scheduling SMS reply.
+Current proposed slot: ${proposedSlot}
+Latest sender label: ${senderLabel ?? "unknown"}
+Latest reply: "${latestMessage}"
+Recent scheduling thread context (oldest -> newest): ${history.length > 0 ? history.map((entry) => `"${entry}"`).join(", ") : "none"}
 City context: ${city ?? "unknown"}
+Current date/time reference: ${referenceIso ?? new Date().toISOString()}
 
-Rules:
-- Combine the latest reply with recent replies when needed. Example: "friday" then "6pm" => "friday at 6:00 pm".
-- If a clear single time is provided, return status "parsed" and a concise "canonicalSlot" (for example: "friday at 8:00 pm").
-- If ambiguous/multiple/no actual time, return status "clarify" with one short natural clarification question.
-- Keep all output lowercase.
+Return ONLY JSON with keys:
+- intent: "accept" | "reject" | "propose_new_time" | "clarify"
+- canonicalSlot: string | null
+- clarificationQuestion: string | null
 
-Return ONLY JSON:
-{"status":"parsed","canonicalSlot":"..."}
-or
-{"status":"clarify","clarificationQuestion":"..."}`,
+Guidance:
+- "accept" when the sender agrees to the current proposed slot.
+- "reject" when the sender declines without giving a new time.
+- "propose_new_time" when the sender suggests or asks about an alternative time.
+- "clarify" only when you truly cannot tell if they accepted, rejected, or proposed a time.
+- Keep canonicalSlot concise, lowercase, and faithful to what they suggested.
+`,
       maxOutputTokens: 120,
     });
-
     const cleaned = text.replace(/```json\n?|```/g, "").trim();
     const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+    const intent = parsed.intent;
     if (
-      parsed.status === "parsed" &&
-      typeof parsed.canonicalSlot === "string" &&
-      parsed.canonicalSlot.trim()
+      intent === "accept" ||
+      intent === "reject" ||
+      intent === "propose_new_time" ||
+      intent === "clarify"
     ) {
-      return { status: "parsed", canonicalSlot: parsed.canonicalSlot.trim() };
-    }
-
-    if (
-      parsed.status === "clarify" &&
-      typeof parsed.clarificationQuestion === "string" &&
-      parsed.clarificationQuestion.trim()
-    ) {
-      return {
-        status: "clarify",
-        clarificationQuestion: parsed.clarificationQuestion.trim(),
+      const result: SchedulingInterpretation = {
+        intent,
+        canonicalSlot:
+          typeof parsed.canonicalSlot === "string" && parsed.canonicalSlot.trim()
+            ? parsed.canonicalSlot.trim().toLowerCase()
+            : undefined,
+        clarificationQuestion:
+          typeof parsed.clarificationQuestion === "string" &&
+          parsed.clarificationQuestion.trim()
+            ? parsed.clarificationQuestion.trim()
+            : undefined,
       };
+
+      const resolved = await resolveDateStartIso({
+        slot: latestMessage,
+        city,
+        referenceIso,
+      });
+      if (resolved && result.intent !== "accept" && result.intent !== "reject") {
+        return {
+          intent: "propose_new_time",
+          canonicalSlot: latestMessage.trim().toLowerCase(),
+        };
+      }
+
+      return result;
     }
   } catch {
-    // ignore and fall through to default clarification
+    // fall through
+  }
+
+  const normalized = latestMessage.toLowerCase();
+  const timeHint =
+    /\b(tomorrow|tmr|tmrw|tonight|tonite|today|this weekend|weekend|next|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)\b/.test(
+      normalized
+    ) || /\b\d{1,2}(:\d{2})?\s?(am|pm)\b/.test(normalized);
+  if (timeHint) {
+    return {
+      intent: "propose_new_time",
+      canonicalSlot: latestMessage.trim().toLowerCase(),
+    };
   }
 
   return {
-    status: "clarify",
-    clarificationQuestion:
-      "can you send one specific day and time that works better for you?",
+    intent: "clarify",
+    clarificationQuestion: "can you share a day and time that works for you?",
   };
 }
 
@@ -204,52 +164,40 @@ or
   return null;
 }
 
-export async function suggestDatePlaceAndReasoning(params: {
-  userA: UserSummary;
-  userB: UserSummary;
-  city: string;
-  agreedTime: string;
-}): Promise<string> {
-  const { userA, userB, city, agreedTime } = params;
-  if (!process.env.AI_GATEWAY_API_KEY) {
-    return `Try a quiet cocktail bar or coffee spot in ${city} around ${agreedTime} so conversation stays easy.`;
-  }
+export async function suggestInitialSlot(params: {
+  city?: string | null;
+  referenceIso?: string;
+}): Promise<string | null> {
+  const { city, referenceIso } = params;
+  if (!process.env.AI_GATEWAY_API_KEY) return null;
 
   try {
     const { text } = await generateText({
       model: MODEL,
-      prompt: `You are a matchmaking assistant. Propose ONE concrete first-date place in ${city} for these two people.
-
-Person A:
-- Name: ${userA.name ?? "Unknown"}
-- Age: ${userA.age ?? "Unknown"}
-- Height: ${userA.height ?? "Unknown"}
-- About: ${userA.aboutMe ?? "Unknown"}
-- Preferences: ${userA.preferences ?? "Unknown"}
-
-Person B:
-- Name: ${userB.name ?? "Unknown"}
-- Age: ${userB.age ?? "Unknown"}
-- Height: ${userB.height ?? "Unknown"}
-- About: ${userB.aboutMe ?? "Unknown"}
-- Preferences: ${userB.preferences ?? "Unknown"}
-
-Agreed time: ${agreedTime}
+      prompt: `Suggest one concrete date/time for a first date.
+City context: ${city ?? "unknown"}
+Reference timestamp: ${referenceIso ?? new Date().toISOString()}
 
 Rules:
-- Return a single plain-text SMS sentence under 140 characters.
-- No markdown, bullets, headings, or line breaks.
-- Mention a specific venue type and why it fits both people.
-- Keep it practical and specific.`,
-      maxOutputTokens: 120,
+- Pick a time at least 2 days from the reference timestamp.
+- Return a short natural-language slot (e.g., "next friday at 7 pm").
+- Return only JSON with key "slot".
+
+Return ONLY JSON:
+{"slot":"next friday at 7 pm"}
+or
+{"slot":null}`,
+      maxOutputTokens: 60,
     });
 
-    const cleaned = text.replace(/[*_`#>\[\]]/g, "").replace(/\s+/g, " ").trim();
-    if (cleaned.length <= PLACE_SUGGESTION_MAX_CHARS) {
-      return cleaned;
+    const cleaned = text.replace(/```json\n?|```/g, "").trim();
+    const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+    if (typeof parsed.slot === "string" && parsed.slot.trim()) {
+      return parsed.slot.trim().toLowerCase();
     }
-    return `${cleaned.slice(0, PLACE_SUGGESTION_MAX_CHARS - 1).trimEnd()}...`;
   } catch {
-    return `Pick a relaxed cafe or wine bar in ${city} around ${agreedTime} where both can talk comfortably.`;
+    // ignore
   }
+
+  return null;
 }

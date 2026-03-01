@@ -1,0 +1,24 @@
+---
+description: Disallow black backgrounds in project UI
+alwaysApply: true
+---
+
+# No Black Backgrounds
+
+- Do not use black background colors in new or edited UI code.
+- Avoid Tailwind classes like `bg-black`, `bg-black/*`, `bg-zinc-950`, `bg-neutral-950`, and similar near-black utilities.
+- Avoid raw CSS colors like `#000`, `#000000`, `rgb(0,0,0)`, and `rgba(0,0,0,...)` for backgrounds.
+
+Use these instead:
+
+- Transparent/glass styles (preferred): `bg-transparent`, border + blur, opacity layers.
+- Tinted project colors: `bg-white/..`, `bg-blue-.../...`, or existing gradient palette used in admin/pages.
+- For overlays/modals, use non-black tinted overlays that match the project palette.
+
+Examples:
+
+- Bad: `className="bg-black/70"`
+- Good: `className="bg-blue-900/45 backdrop-blur-sm"`
+
+- Bad: `background-color: #000;`
+- Good: `background-color: transparent;` (or a project-matching tinted value)

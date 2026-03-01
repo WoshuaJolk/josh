@@ -4,9 +4,11 @@ import { AdminCardModal } from "@/components/AdminCardModal";
 import type { LucideIcon } from "lucide-react";
 import {
   Baby,
+  Check,
   Briefcase,
   CalendarDays,
   Cigarette,
+  Copy,
   Eye,
   GlassWater,
   Heart,
@@ -20,6 +22,7 @@ import {
   RefreshCcw,
   Ruler,
   Scale,
+  SendHorizontal,
   Sparkles,
   Speech,
   Trash2,
@@ -29,10 +32,11 @@ import {
 import Image from "next/image";
 import { useCallback, useEffect, useState } from "react";
 
-type Tab = "approvals" | "pairing" | "onboarding" | "blocked";
+type Tab = "approvals" | "pairing" | "test" | "onboarding" | "blocked";
 type TabCounts = {
   approvals: number;
   pairing: number;
+  test: number;
   onboarding: number;
   blocked: number;
 };
@@ -40,6 +44,7 @@ type TabCounts = {
 const EMPTY_TAB_COUNTS: TabCounts = {
   approvals: 0,
   pairing: 0,
+  test: 0,
   onboarding: 0,
   blocked: 0,
 };
@@ -100,6 +105,15 @@ interface TpoDate {
     | "dlHeight"
   >;
   _count: { messages: number };
+}
+
+interface TpoDateMessage {
+  id: string;
+  createdAt: string;
+  fromPhone: string;
+  toPhone: string;
+  body: string;
+  blocked: boolean;
 }
 
 function formatStepLabel(step: string): string {
@@ -1055,6 +1069,7 @@ export default function BackendPage() {
       setTabCounts({
         approvals,
         pairing,
+        test: 0,
         onboarding,
         blocked: banned + rejected,
       });
@@ -1136,6 +1151,16 @@ export default function BackendPage() {
             Pairing ({tabCounts.pairing})
           </button>
           <button
+            onClick={() => setTab("test")}
+            className={`rounded-md px-4 py-2 text-sm transition-colors ${
+              tab === "test"
+                ? "bg-white text-[#1d4ed8]"
+                : " text-white/85 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            Test
+          </button>
+          <button
             onClick={() => setTab("onboarding")}
             className={`rounded-md px-4 py-2 text-sm transition-colors ${
               tab === "onboarding"
@@ -1159,6 +1184,7 @@ export default function BackendPage() {
 
         {tab === "approvals" && <ApprovalsTab apiKey={apiKey} />}
         {tab === "pairing" && <PairingTab apiKey={apiKey} />}
+        {tab === "test" && <TestTab apiKey={apiKey} />}
         {tab === "onboarding" && <OnboardingTab apiKey={apiKey} />}
         {tab === "blocked" && <BlockedTab apiKey={apiKey} />}
       </div>
@@ -1293,6 +1319,75 @@ function ApplicationPlaintextModal({
     >
       <div className="min-h-0 flex-1 overflow-y-auto text-xs leading-relaxed text-white/90 whitespace-pre-wrap">
         {formatApplicationPlaintext(user)}
+      </div>
+    </AdminCardModal>
+  );
+}
+
+function DateConversationModal({
+  date,
+  messages,
+  loading,
+  onClose,
+}: {
+  date: TpoDate;
+  messages: TpoDateMessage[];
+  loading: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <AdminCardModal
+      open
+      title="Pair conversation"
+      subtitle={`${getDisplayName(date.userA)} & ${getDisplayName(date.userB)}`}
+      maxWidthClass="max-w-3xl"
+      onClose={onClose}
+    >
+      <div className="space-y-3 min-h-0 flex-1">
+        <div className="rounded-lg border border-white/20 bg-white/6 p-3 text-[11px] leading-relaxed text-white/85">
+          <p className="font-semibold text-white/95 mb-1">date/time requests</p>
+          <p>
+            {date.portalEnabled
+              ? `portal open${date.agreedTime ? ` · ${date.agreedTime}` : ""}`
+              : `scheduling${date.proposedSlot ? ` · ${date.proposedSlot}` : ""}`}
+          </p>
+          <p>
+            {formatStepLabel(date.schedulingPhase)} ·{" "}
+            {date.schedulingAttemptCount} attempts
+          </p>
+          {date.lastSchedulingMessageAt && (
+            <p>
+              last scheduling touch:{" "}
+              {new Date(date.lastSchedulingMessageAt).toLocaleString()}
+            </p>
+          )}
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-white/20 bg-white/6 p-3 text-xs leading-relaxed text-white/90">
+          {loading ? (
+            <p className="text-white/60">loading conversation...</p>
+          ) : messages.length === 0 ? (
+            <p className="text-white/60">no messages yet</p>
+          ) : (
+            <div className="space-y-2">
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  className="rounded-md border border-white/10 bg-black/20 p-2"
+                >
+                  <p className="mb-1 text-[10px] text-white/60">
+                    {message.fromPhone} → {message.toPhone} ·{" "}
+                    {new Date(message.createdAt).toLocaleString()}
+                    {message.blocked ? " · blocked" : ""}
+                  </p>
+                  <p className="whitespace-pre-wrap break-words text-white/90">
+                    {message.body}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </AdminCardModal>
   );
@@ -1759,6 +1854,12 @@ function PairingTab({ apiKey }: { apiKey: string }) {
   } | null>(null);
   const [applicationModalUser, setApplicationModalUser] =
     useState<TpoUser | null>(null);
+  const [conversationModalDate, setConversationModalDate] =
+    useState<TpoDate | null>(null);
+  const [conversationMessages, setConversationMessages] = useState<
+    TpoDateMessage[]
+  >([]);
+  const [conversationLoading, setConversationLoading] = useState(false);
 
   const fetchData = useCallback(
     async (isInitial = false) => {
@@ -2027,6 +2128,29 @@ function PairingTab({ apiKey }: { apiKey: string }) {
     }
   };
 
+  const openDateConversation = async (date: TpoDate) => {
+    setConversationModalDate(date);
+    setConversationLoading(true);
+    try {
+      const res = await fetch(`/api/tpo/admin/messages?dateId=${date.id}`, {
+        headers: { "x-internal-api-key": apiKey },
+      });
+      if (!res.ok) {
+        setConversationMessages([]);
+        return;
+      }
+      const data = (await res.json()) as { messages?: TpoDateMessage[] };
+      setConversationMessages(
+        Array.isArray(data.messages) ? data.messages : [],
+      );
+    } catch (err) {
+      console.error("Failed to fetch date conversation", err);
+      setConversationMessages([]);
+    } finally {
+      setConversationLoading(false);
+    }
+  };
+
   if (initialLoading) return null;
 
   return (
@@ -2254,35 +2378,45 @@ function PairingTab({ apiKey }: { apiKey: string }) {
                 key={date.id}
                 className="flex flex-col rounded-xl border border-white/25 bg-white/12 p-4 backdrop-blur-md"
               >
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="flex -space-x-2 shrink-0">
-                    {date.userA.photoUrls[0] && (
-                      <SecureImage
-                        path={date.userA.photoUrls[0]}
-                        urlMap={urlMap}
-                        alt=""
-                        className="w-8 h-8 rounded-full object-cover border-2 border-white"
-                      />
-                    )}
-                    {date.userB.photoUrls[0] && (
-                      <SecureImage
-                        path={date.userB.photoUrls[0]}
-                        urlMap={urlMap}
-                        alt=""
-                        className="w-8 h-8 rounded-full object-cover border-2 border-white"
-                      />
-                    )}
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex -space-x-2 shrink-0">
+                      {date.userA.photoUrls[0] && (
+                        <SecureImage
+                          path={date.userA.photoUrls[0]}
+                          urlMap={urlMap}
+                          alt=""
+                          className="w-8 h-8 rounded-full object-cover border-2 border-white"
+                        />
+                      )}
+                      {date.userB.photoUrls[0] && (
+                        <SecureImage
+                          path={date.userB.photoUrls[0]}
+                          urlMap={urlMap}
+                          alt=""
+                          className="w-8 h-8 rounded-full object-cover border-2 border-white"
+                        />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-white">
+                        {getDisplayName(date.userA)} &{" "}
+                        {getDisplayName(date.userB)}
+                      </p>
+                      <p className="text-[11px] text-white/60">
+                        {date._count.messages} msgs ·{" "}
+                        {new Date(date.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-white truncate">
-                      {getDisplayName(date.userA)} &{" "}
-                      {getDisplayName(date.userB)}
-                    </p>
-                    <p className="text-[11px] text-white/60">
-                      {date._count.messages} msgs ·{" "}
-                      {new Date(date.createdAt).toLocaleDateString()}
-                    </p>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void openDateConversation(date)}
+                    className="rounded-full bg-white/15 p-1 text-white/85 hover:bg-white/25 hover:text-white"
+                    title="view pair conversation"
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                  </button>
                 </div>
 
                 <div className="mb-3 space-y-0.5 text-[11px] text-white/70">
@@ -2371,6 +2505,365 @@ function PairingTab({ apiKey }: { apiKey: string }) {
           onClose={() => setApplicationModalUser(null)}
         />
       )}
+      {conversationModalDate && (
+        <DateConversationModal
+          date={conversationModalDate}
+          messages={conversationMessages}
+          loading={conversationLoading}
+          onClose={() => {
+            setConversationModalDate(null);
+            setConversationMessages([]);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function TestTab({ apiKey }: { apiKey: string }) {
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [userA, setUserA] = useState<TpoUser | null>(null);
+  const [userB, setUserB] = useState<TpoUser | null>(null);
+  const [date, setDate] = useState<TpoDate | null>(null);
+  const [messages, setMessages] = useState<TpoDateMessage[]>([]);
+  const [draftA, setDraftA] = useState("");
+  const [draftB, setDraftB] = useState("");
+  const [copySuccess, setCopySuccess] = useState(false);
+
+  const refreshState = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/tpo/admin/test", {
+        headers: { "x-internal-api-key": apiKey },
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        userA?: TpoUser;
+        userB?: TpoUser;
+        date?: TpoDate | null;
+        messages?: TpoDateMessage[];
+      };
+      setUserA(data.userA ?? null);
+      setUserB(data.userB ?? null);
+      setDate(data.date ?? null);
+      setMessages(Array.isArray(data.messages) ? data.messages : []);
+    } catch (err) {
+      console.error("Failed to load test state", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [apiKey]);
+
+  useEffect(() => {
+    const bootstrap = async () => {
+      setActionLoading("setup");
+      try {
+        await fetch("/api/tpo/admin/test", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-internal-api-key": apiKey,
+          },
+          body: JSON.stringify({ action: "setup_accounts" }),
+        });
+        await fetch("/api/tpo/admin/test", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-internal-api-key": apiKey,
+          },
+          body: JSON.stringify({ action: "ensure_pair" }),
+        });
+      } catch (err) {
+        console.error("Failed to setup test accounts", err);
+      } finally {
+        setActionLoading(null);
+      }
+      await refreshState();
+    };
+    void bootstrap();
+  }, [apiKey, refreshState]);
+
+  const ensurePair = async () => {
+    setActionLoading("pair");
+    try {
+      await fetch("/api/tpo/admin/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-internal-api-key": apiKey,
+        },
+        body: JSON.stringify({ action: "ensure_pair" }),
+      });
+      await refreshState();
+    } catch (err) {
+      console.error("Failed to pair test users", err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const resetPair = async () => {
+    setActionLoading("reset");
+    try {
+      await fetch("/api/tpo/admin/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-internal-api-key": apiKey,
+        },
+        body: JSON.stringify({ action: "reset" }),
+      });
+      await refreshState();
+    } catch (err) {
+      console.error("Failed to reset test users", err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const sendFrom = async (sender: "A" | "B") => {
+    const text = sender === "A" ? draftA.trim() : draftB.trim();
+    if (!text) return;
+    const fromPhone =
+      sender === "A" ? (userA?.phoneNumber ?? "") : (userB?.phoneNumber ?? "");
+    const toPhone =
+      date && userA && userB
+        ? date.portalEnabled
+          ? sender === "A"
+            ? userB.phoneNumber
+            : userA.phoneNumber
+          : "SYSTEM"
+        : "SYSTEM";
+    const optimisticMessage: TpoDateMessage | null = fromPhone
+      ? {
+          id: `optimistic-${sender}-${Date.now()}`,
+          createdAt: new Date().toISOString(),
+          fromPhone,
+          toPhone,
+          body: text,
+          blocked: false,
+        }
+      : null;
+    if (optimisticMessage) {
+      setMessages((prev) => [...prev, optimisticMessage]);
+    }
+    if (sender === "A") setDraftA("");
+    if (sender === "B") setDraftB("");
+    setActionLoading(`send:${sender}`);
+    try {
+      const res = await fetch("/api/tpo/admin/test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-internal-api-key": apiKey,
+        },
+        body: JSON.stringify({ action: "send_message", sender, text }),
+      });
+      if (!res.ok) {
+        await refreshState();
+        return;
+      }
+      const data = (await res.json()) as {
+        userA?: TpoUser;
+        userB?: TpoUser;
+        date?: TpoDate | null;
+        messages?: TpoDateMessage[];
+      };
+      setUserA(data.userA ?? userA);
+      setUserB(data.userB ?? userB);
+      setDate(data.date ?? date);
+      setMessages(Array.isArray(data.messages) ? data.messages : []);
+    } catch (err) {
+      console.error("Failed to send test message", err);
+      await refreshState();
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const buildThreadText = useCallback(
+    (selfPhone: string, title: string) => {
+      const visibleMessages = messages.filter(
+        (message) => message.fromPhone === selfPhone || message.toPhone === selfPhone
+      );
+      if (visibleMessages.length === 0) return "no messages";
+      return visibleMessages
+        .map((message) => {
+          const timestamp = new Date(message.createdAt).toLocaleString();
+          const senderLabel =
+            message.fromPhone === "SYSTEM"
+              ? "scheduler"
+              : message.fromPhone === selfPhone
+                ? title
+                : "match";
+          return `[${timestamp}] ${senderLabel}: ${message.body}`;
+        })
+        .join("\n");
+    },
+    [messages]
+  );
+
+  const copyThreads = async () => {
+    if (!userA || !userB) return;
+    const titleA = userA.dlName || "Test User A";
+    const titleB = userB.dlName || "Test User B";
+    const threadA = buildThreadText(userA.phoneNumber, titleA);
+    const threadB = buildThreadText(userB.phoneNumber, titleB);
+    const payload = `${titleA} (${userA.phoneNumber})\n${threadA}\n\n${titleB} (${userB.phoneNumber})\n${threadB}`;
+    try {
+      await navigator.clipboard.writeText(payload);
+      setCopySuccess(true);
+      window.setTimeout(() => setCopySuccess(false), 1800);
+    } catch (err) {
+      console.error("Failed to copy test threads", err);
+    }
+  };
+
+  if (loading) return null;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-white/25 bg-white/12 p-4 backdrop-blur-md">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={ensurePair}
+            disabled={actionLoading === "pair"}
+            className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-[#1d4ed8] transition-colors hover:bg-white/90 disabled:opacity-50"
+          >
+            {actionLoading === "pair" ? "pairing..." : "pair test users"}
+          </button>
+          <button
+            type="button"
+            onClick={resetPair}
+            className="rounded-md border border-white/35 bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/20"
+          >
+            {actionLoading === "reset" ? "resetting..." : "refresh"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void copyThreads()}
+            disabled={!userA || !userB}
+            className="inline-flex items-center gap-1.5 rounded-md border border-white/35 bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/20 disabled:opacity-50"
+          >
+            {copySuccess ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            {copySuccess ? "copied" : "copy threads"}
+          </button>
+          <p className="text-xs text-white/65">
+            these are approved test accounts (no sms relay).
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        {[
+          { user: userA, sender: "A" as const },
+          { user: userB, sender: "B" as const },
+        ].map(({ user, sender }) => {
+          const draft = sender === "A" ? draftA : draftB;
+          const setDraft = sender === "A" ? setDraftA : setDraftB;
+          const selfPhone = user?.phoneNumber ?? "";
+          const title = user?.dlName || `Test User ${sender}`;
+          return (
+            <div
+              key={sender}
+              className="rounded-2xl border border-white/25 bg-white/12 p-3 backdrop-blur-md"
+            >
+              <div className="mb-2 rounded-xl px-3 py-2">
+                <p className="text-sm font-semibold text-white">{title}</p>
+                <p className="text-[11px] text-white/65">
+                  {selfPhone || "not provisioned"}
+                </p>
+              </div>
+
+              <div className="h-[420px] overflow-y-auto rounded-xl p-3">
+                {messages.length === 0 ? (
+                  <p className="text-xs text-white/60">no messages yet</p>
+                ) : (
+                  <div className="space-y-2">
+                    {messages.map((message) => {
+                      const isOutgoing = message.fromPhone === selfPhone;
+                      const isIncoming = message.toPhone === selfPhone;
+                      if (!isOutgoing && !isIncoming) return null;
+
+                      const isSystem = message.fromPhone === "SYSTEM";
+                      if (isSystem) {
+                        return (
+                          <div
+                            key={`${sender}:${message.id}`}
+                            className="flex justify-start"
+                          >
+                            <div className="max-w-[88%] rounded-2xl border border-white/25 px-3 py-2 text-[11px] text-white/90">
+                              <p className="mb-0.5 text-[10px] uppercase tracking-wide text-white/60">
+                                scheduler
+                              </p>
+                              <p className="whitespace-pre-wrap break-words">
+                                {message.body}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div
+                          key={`${sender}:${message.id}`}
+                          className={`flex ${isOutgoing ? "justify-end" : "justify-start"}`}
+                        >
+                          <div
+                            className={`max-w-[82%] rounded-2xl px-3 py-2 text-xs ${
+                              isOutgoing
+                                ? "bg-white text-[#1d4ed8]"
+                                : "border border-white/30 text-white"
+                            }`}
+                          >
+                            <p className="whitespace-pre-wrap break-words">
+                              {message.body}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-2 flex items-center gap-2 rounded-xl p-2">
+                <input
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    if (
+                      actionLoading === `send:${sender}` ||
+                      !date ||
+                      !draft.trim()
+                    )
+                      return;
+                    void sendFrom(sender);
+                  }}
+                  placeholder="iMessage"
+                  className="flex-1 rounded-full border border-white/30 bg-transparent px-3 py-2 text-xs text-white placeholder:text-white/45 focus:outline-none focus:ring-1 focus:ring-white/45"
+                />
+                <button
+                  type="button"
+                  onClick={() => void sendFrom(sender)}
+                  disabled={
+                    actionLoading === `send:${sender}` || !date || !draft.trim()
+                  }
+                  className="inline-flex items-center justify-center rounded-full bg-blue-500 p-2 text-white transition-colors hover:bg-blue-400 disabled:bg-white/25 disabled:text-white/55 disabled:opacity-100"
+                  aria-label="Send message"
+                >
+                  <SendHorizontal className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

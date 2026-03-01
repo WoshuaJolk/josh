@@ -95,11 +95,8 @@ export const TPO_REJECTED_TEXT =
 export const TPO_MATCHED_TEXT =
   "you've been matched! any messages you send to this number will be forwarded to your match. have fun getting to know each other!";
 
-export const TPO_SCHEDULING_FRIDAY_TEXT =
-  "you're matched! before we open chat, does next friday at 7:00 pm work for you for a first date? reply yes or no.";
-
 export const TPO_SCHEDULING_WAITING_TEXT =
-  "thanks - we're checking with your match and will confirm shortly.";
+  "thanks - checking with your match now. i will confirm shortly.";
 
 export const TPO_DATE_PLAN_READY_TEXT_PREFIX =
   "great - you're both confirmed. here's your suggested date:";
