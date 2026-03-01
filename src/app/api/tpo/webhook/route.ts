@@ -5,7 +5,6 @@ import { Prisma } from "@prisma/client";
 import { db } from "@/server/db";
 import { validateSurgeSignature } from "@/lib/surgeWebhook";
 import { sendSms } from "@/lib/surgeSend";
-import { handleSchedulingReplyCore } from "@/lib/tpoSchedulingEngine";
 import { sanitizeBlockedWords, containsBlockedWords } from "@/lib/curseFilter";
 import { extractDriversLicenseData } from "@/lib/dlExtract";
 import {
@@ -774,16 +773,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (user.status === "APPROVED") {
-      const handled = await handleSchedulingReplyCore({
-        senderPhone,
-        messageBody,
-        deliverMessage: async (toPhone, message) => {
-          await sendSms(toPhone, message, { skipProfanityFilter: true });
-        },
-      });
-      if (!handled) {
-        await handleMessageRelay(senderPhone, messageBody);
-      }
+      await handleMessageRelay(senderPhone, messageBody);
       return NextResponse.json({ ok: true });
     }
 

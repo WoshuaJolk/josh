@@ -5,8 +5,6 @@ import {
   INTERNAL_API_KEY_HEADER,
 } from "@/lib/internalApiAuth";
 import { sendSms } from "@/lib/surgeSend";
-import { suggestInitialSlot } from "@/lib/datePlanner";
-import { buildInitialSchedulingPrompt, getSharedCity } from "@/lib/tpoSchedulingShared";
 
 export async function POST(req: NextRequest) {
   try {
@@ -68,33 +66,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const sharedCity = getSharedCity(userA.city, userB.city);
-    const suggested = await suggestInitialSlot({
-      city: sharedCity,
-      referenceIso: new Date().toISOString(),
-    });
-    const proposedSlot = suggested ?? "next friday at 7:00 pm";
-
     const date = await db.tpoDate.create({
       data: {
         userAId,
         userBId,
         status: "ACTIVE",
         portalEnabled: false,
-        proposedSlot,
-        userAAvailable: null,
-        userBAvailable: null,
-        schedulingPhase: "WAITING_FOR_A_REPLY",
-        schedulingAttemptCount: 1,
-        lastSchedulingMessageAt: new Date(),
       },
     });
 
-    await sendSms(
-      userA.phoneNumber,
-      buildInitialSchedulingPrompt({ slot: proposedSlot, city: sharedCity }),
-      { skipProfanityFilter: true }
-    );
+    await sendSms(userA.phoneNumber, "you've been matched!", {
+      skipProfanityFilter: true,
+    });
     await sendSms(userB.phoneNumber, "you've been matched!", {
       skipProfanityFilter: true,
     });
